@@ -97,6 +97,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                                         .set("ts", System.currentTimeMillis())
                                         .toString().getBytes())));
                     }
+                    return chain.filter(exchange);
                 }
             }
             logger.warn("未知客户端类型[{}]", clientType);
