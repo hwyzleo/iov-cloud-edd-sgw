@@ -8,11 +8,10 @@ import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.List;
 
 /**
- * 身份认证网关过滤器
+ * 身份授权网关过滤器
  *
  * @author hwyz_leo
  */
