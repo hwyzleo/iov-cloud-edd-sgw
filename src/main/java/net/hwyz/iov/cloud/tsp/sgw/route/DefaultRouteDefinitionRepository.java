@@ -85,7 +85,7 @@ public class DefaultRouteDefinitionRepository implements RouteDefinitionReposito
      * @param targetUri      目标URI
      * @return 路由
      */
-    private RouteDefinition addRoute(String id, String predicatesJson, String filtersJson, String targetType, String targetUri) {
+    public RouteDefinition addRoute(String id, String predicatesJson, String filtersJson, String targetType, String targetUri) {
         JSONObject predicatesJsonObject = JSONUtil.parseObj(predicatesJson);
         List<PredicateDefinition> predicateDefinitions = new ArrayList<>();
         for (String key : predicatesJsonObject.keySet()) {

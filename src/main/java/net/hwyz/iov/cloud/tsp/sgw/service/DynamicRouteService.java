@@ -26,8 +26,8 @@ public interface DynamicRouteService {
     /**
      * 删除路由
      *
-     * @param id 路由ID
+     * @param ids 路由ID列表
      */
-    void delete(String id);
+    void delete(Long[] ids);
 
 }

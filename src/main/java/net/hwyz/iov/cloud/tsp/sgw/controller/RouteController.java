@@ -1,0 +1,62 @@
+package net.hwyz.iov.cloud.tsp.sgw.controller;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import net.hwyz.iov.cloud.mpt.system.api.domain.TspSgwRoute;
+import net.hwyz.iov.cloud.tsp.sgw.route.DefaultRouteDefinitionRepository;
+import net.hwyz.iov.cloud.tsp.sgw.service.DynamicRouteService;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Arrays;
+
+/**
+ * 路由相关接口实现类
+ *
+ * @author hwyz_leo
+ */
+@Slf4j
+@RestController
+@RequiredArgsConstructor
+@RequestMapping(value = "/route")
+public class RouteController {
+
+    private final DynamicRouteService dynamicRouteService;
+    private final DefaultRouteDefinitionRepository defaultRouteDefinitionRepository;
+
+    /**
+     * 新增路由
+     *
+     * @param route 路由
+     */
+    @PostMapping
+    public void add(@RequestBody @Validated TspSgwRoute route) {
+        logger.info("新增路由[{}]", route.getTargetUri());
+        dynamicRouteService.add(defaultRouteDefinitionRepository.addRoute(String.valueOf(route.getId()), route.getPredicates(),
+                route.getFilters(), route.getTargetType(), route.getTargetUri()));
+    }
+
+    /**
+     * 更新路由
+     *
+     * @param route 路由
+     */
+    @PutMapping
+    public void update(@RequestBody @Validated TspSgwRoute route) {
+        logger.info("更新路由[{}]", route.getTargetUri());
+        dynamicRouteService.update(defaultRouteDefinitionRepository.addRoute(String.valueOf(route.getId()), route.getPredicates(),
+                route.getFilters(), route.getTargetType(), route.getTargetUri()));
+    }
+
+    /**
+     * 删除路由
+     *
+     * @param ids 路由ID列表
+     */
+    @DeleteMapping("/{ids}")
+    public void delete(@PathVariable Long[] ids) {
+        logger.info("删除路由[{}]", Arrays.toString(ids));
+        dynamicRouteService.delete(ids);
+    }
+
+}

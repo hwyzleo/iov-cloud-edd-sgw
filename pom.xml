@@ -19,6 +19,7 @@
 
     <properties>
         <framework-mysql.version>0.0.1-SNAPSHOT</framework-mysql.version>
+        <mpt-system.version>0.0.1-SNAPSHOT</mpt-system.version>
     </properties>
 
     <dependencies>
@@ -26,6 +27,12 @@
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>net.hwyz.iov.cloud.mpt</groupId>
+            <artifactId>system-api</artifactId>
+            <version>${mpt-system.version}</version>
         </dependency>
 
         <!-- 流量控制相关 -->

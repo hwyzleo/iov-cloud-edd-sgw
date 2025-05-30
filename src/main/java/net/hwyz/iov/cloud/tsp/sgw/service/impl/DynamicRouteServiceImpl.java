@@ -36,20 +36,18 @@ public class DynamicRouteServiceImpl implements DynamicRouteService, Application
     @Override
     public void update(RouteDefinition definition) {
         delete(definition.getId());
-        try {
-            routeDefinitionWriter.save(Mono.just(definition)).subscribe();
-            this.publisher.publishEvent(new RefreshRoutesEvent(this));
-        } catch (Exception e) {
-
-        }
+        routeDefinitionWriter.save(Mono.just(definition)).subscribe();
+        this.publisher.publishEvent(new RefreshRoutesEvent(this));
     }
 
     @Override
-    public void delete(String id) {
-        try {
-            this.routeDefinitionWriter.delete(Mono.just(id)).onErrorResume((t) -> Mono.empty());
-        } catch (Exception e) {
-
+    public void delete(Long[] ids) {
+        for (Long id : ids) {
+            delete(id.toString());
         }
+    }
+
+    private void delete(String id) {
+        this.routeDefinitionWriter.delete(Mono.just(id)).onErrorResume((t) -> Mono.empty());
     }
 }
