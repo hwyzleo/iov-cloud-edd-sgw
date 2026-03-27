@@ -2,4 +2,4 @@ server:
   port: 8080
 
 mybatis-plus:
-  type-aliases-package: net.hwyz.iov.cloud.tsp.sgw.repository.po
+  type-aliases-package: net.hwyz.iov.cloud.edd.sgw.repository.po

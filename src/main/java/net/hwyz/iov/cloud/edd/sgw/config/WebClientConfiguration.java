@@ -1,4 +1,4 @@
-package net.hwyz.iov.cloud.tsp.sgw.config;
+package net.hwyz.iov.cloud.edd.sgw.config;
 
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;

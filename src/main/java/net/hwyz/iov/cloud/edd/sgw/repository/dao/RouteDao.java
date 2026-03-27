@@ -1,7 +1,7 @@
-package net.hwyz.iov.cloud.tsp.sgw.repository.dao;
+package net.hwyz.iov.cloud.edd.sgw.repository.dao;
 
 import net.hwyz.iov.cloud.framework.mysql.dao.BaseDao;
-import net.hwyz.iov.cloud.tsp.sgw.repository.po.RoutePo;
+import net.hwyz.iov.cloud.edd.sgw.repository.po.RoutePo;
 import org.apache.ibatis.annotations.Mapper;
 
 /**

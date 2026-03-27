@@ -1,4 +1,4 @@
-package net.hwyz.iov.cloud.tsp.sgw.enums;
+package net.hwyz.iov.cloud.edd.sgw.enums;
 
 import lombok.AllArgsConstructor;
 

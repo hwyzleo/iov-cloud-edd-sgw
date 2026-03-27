@@ -1,4 +1,4 @@
-package net.hwyz.iov.cloud.tsp.sgw.service;
+package net.hwyz.iov.cloud.edd.sgw.service;
 
 import org.springframework.cloud.gateway.route.RouteDefinition;
 

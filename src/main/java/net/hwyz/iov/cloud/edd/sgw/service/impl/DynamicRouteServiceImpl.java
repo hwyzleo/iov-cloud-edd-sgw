@@ -1,6 +1,6 @@
-package net.hwyz.iov.cloud.tsp.sgw.service.impl;
+package net.hwyz.iov.cloud.edd.sgw.service.impl;
 
-import net.hwyz.iov.cloud.tsp.sgw.service.DynamicRouteService;
+import net.hwyz.iov.cloud.edd.sgw.service.DynamicRouteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cloud.gateway.event.RefreshRoutesEvent;
 import org.springframework.cloud.gateway.route.RouteDefinition;

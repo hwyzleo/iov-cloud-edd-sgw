@@ -11,7 +11,7 @@
         <version>0.0.1-SNAPSHOT</version>
     </parent>
 
-    <groupId>net.hwyz.iov.cloud.tsp</groupId>
+    <groupId>net.hwyz.iov.cloud.edd</groupId>
     <artifactId>service-gateway</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <description>服务网关</description>

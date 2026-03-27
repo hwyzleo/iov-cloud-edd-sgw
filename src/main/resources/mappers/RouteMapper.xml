@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="net.hwyz.iov.cloud.tsp.sgw.repository.dao.RouteDao">
+<mapper namespace="net.hwyz.iov.cloud.edd.sgw.repository.dao.RouteDao">
 
     <!-- 通用查询映射结果 -->
-    <resultMap id="baseResultMap" type="net.hwyz.iov.cloud.tsp.sgw.repository.po.RoutePo">
+    <resultMap id="baseResultMap" type="net.hwyz.iov.cloud.edd.sgw.repository.po.RoutePo">
         <id column="id" property="id" />
         <result column="description" property="description" />
         <result column="create_time" property="createTime" />
@@ -53,7 +53,7 @@
     </insert>
 
     <!-- 更新 -->
-    <update id="updatePo" parameterType="net.hwyz.iov.cloud.tsp.sgw.repository.po.RoutePo">
+    <update id="updatePo" parameterType="net.hwyz.iov.cloud.edd.sgw.repository.po.RoutePo">
         UPDATE tb_route t SET
         <if test="predicates != null and predicates != ''">
             t.predicates = #{predicates},
@@ -105,7 +105,7 @@
     </select>
 
     <!-- 根据数据对象获取对应数据列表 -->
-    <select id="selectPoByExample" parameterType="net.hwyz.iov.cloud.tsp.sgw.repository.po.RoutePo" resultMap="baseResultMap">
+    <select id="selectPoByExample" parameterType="net.hwyz.iov.cloud.edd.sgw.repository.po.RoutePo" resultMap="baseResultMap">
         SELECT <include refid="baseColumnList"/>
         FROM tb_route t
         WHERE t.row_valid = 1

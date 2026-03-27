@@ -1,10 +1,10 @@
-package net.hwyz.iov.cloud.tsp.sgw.controller;
+package net.hwyz.iov.cloud.edd.sgw.controller;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.hwyz.iov.cloud.mpt.system.api.domain.TspSgwRoute;
-import net.hwyz.iov.cloud.tsp.sgw.route.DefaultRouteDefinitionRepository;
-import net.hwyz.iov.cloud.tsp.sgw.service.DynamicRouteService;
+import net.hwyz.iov.cloud.edd.sgw.route.DefaultRouteDefinitionRepository;
+import net.hwyz.iov.cloud.edd.sgw.service.DynamicRouteService;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 

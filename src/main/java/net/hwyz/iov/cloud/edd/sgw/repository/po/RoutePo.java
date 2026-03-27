@@ -1,4 +1,4 @@
-package net.hwyz.iov.cloud.tsp.sgw.repository.po;
+package net.hwyz.iov.cloud.edd.sgw.repository.po;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;

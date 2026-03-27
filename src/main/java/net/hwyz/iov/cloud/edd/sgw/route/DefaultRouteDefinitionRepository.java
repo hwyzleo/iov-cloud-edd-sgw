@@ -1,12 +1,12 @@
-package net.hwyz.iov.cloud.tsp.sgw.route;
+package net.hwyz.iov.cloud.edd.sgw.route;
 
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.hwyz.iov.cloud.tsp.sgw.enums.RouteTargetType;
-import net.hwyz.iov.cloud.tsp.sgw.repository.dao.RouteDao;
+import net.hwyz.iov.cloud.edd.sgw.enums.RouteTargetType;
+import net.hwyz.iov.cloud.edd.sgw.repository.dao.RouteDao;
 import org.springframework.cloud.gateway.event.RefreshRoutesEvent;
 import org.springframework.cloud.gateway.filter.FilterDefinition;
 import org.springframework.cloud.gateway.handler.predicate.PredicateDefinition;
