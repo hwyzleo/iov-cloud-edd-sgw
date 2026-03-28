@@ -59,4 +59,14 @@ public class RouteController {
         dynamicRouteService.delete(ids);
     }
 
+    /**
+     * 刷新路由
+     * 从数据库重新加载所有路由配置，使增删改过的路由实时生效
+     */
+    @PostMapping("/refresh")
+    public void refresh() {
+        logger.info("刷新路由配置");
+        dynamicRouteService.refresh();
+    }
+
 }

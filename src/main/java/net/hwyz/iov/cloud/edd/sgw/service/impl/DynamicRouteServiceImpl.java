@@ -47,6 +47,11 @@ public class DynamicRouteServiceImpl implements DynamicRouteService, Application
         }
     }
 
+    @Override
+    public void refresh() {
+        this.publisher.publishEvent(new RefreshRoutesEvent(this));
+    }
+
     private void delete(String id) {
         this.routeDefinitionWriter.delete(Mono.just(id)).onErrorResume((t) -> Mono.empty());
     }

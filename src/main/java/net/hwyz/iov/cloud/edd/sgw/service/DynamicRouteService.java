@@ -30,4 +30,9 @@ public interface DynamicRouteService {
      */
     void delete(Long[] ids);
 
+    /**
+     * 刷新路由
+     */
+    void refresh();
+
 }
