@@ -12,6 +12,7 @@ pipeline {
                 script {
                     sh '''
                         echo '============================== 构建镜像 =============================='
+                        cp /var/jenkins_home/settings.xml ./settings.xml
                         docker build -t ${IMAGE_NAME} -f ../Dockerfile .
                     '''
                 }
