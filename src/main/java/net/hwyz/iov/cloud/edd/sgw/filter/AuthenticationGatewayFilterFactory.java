@@ -168,7 +168,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                         log.error("JWKS 格式错误或不包含 keys: {}", response);
                         return Mono.error(new IllegalStateException("JWKS 中没有找到公钥"));
                     }
-                    Map<String, Object> key = (Map<String, Object>) data.get("keys");
+                    Map<String, Object> key = (Map<String, Object>) ((java.util.List<?>) data.get("keys")).get(0);
                     return Mono.just(parseRSAPublicKey(key));
                 })
                 .doOnNext(publicKey -> this.cachedPublicKey = publicKey);
