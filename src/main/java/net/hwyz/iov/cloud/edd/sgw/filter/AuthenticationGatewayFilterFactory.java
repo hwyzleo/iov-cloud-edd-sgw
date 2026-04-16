@@ -157,14 +157,18 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
     @SuppressWarnings("unchecked")
     private Mono<RSAPublicKey> getPublicKey() {
         if (cachedPublicKey != null) {
+            log.info("使用缓存的公钥");
             return Mono.just(cachedPublicKey);
         }
+        log.info("开始获取公钥");
         return fetchJwks()
                 .flatMap(jwks -> {
+                    log.info("获取到 JWKS 数据: keys={}", jwks.keySet());
                     if (jwks.containsKey("keys") && !((java.util.List<?>) jwks.get("keys")).isEmpty()) {
                         Map<String, Object> key = (Map<String, Object>) ((java.util.List<?>) jwks.get("keys")).get(0);
                         return Mono.just(parseRSAPublicKey(key));
                     }
+                    log.error("JWKS 格式错误或不包含 keys: {}", jwks);
                     return Mono.error(new IllegalStateException("JWKS 中没有找到公钥"));
                 })
                 .doOnNext(publicKey -> this.cachedPublicKey = publicKey);
@@ -173,15 +177,20 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
     @SuppressWarnings("unchecked")
     private Mono<Map<String, Object>> fetchJwks() {
         if (!jwksCache.isEmpty()) {
+            log.info("从缓存获取 JWKS");
             return (Mono<Map<String, Object>>) (Mono<?>) Mono.just(jwksCache);
         }
+        log.info("从 sec-ciam 获取 JWKS");
         return webClientBuilder.build()
                 .get()
                 .uri(JWKS_URI)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(m -> (Map<String, Object>) m)
-                .doOnNext(jwks -> jwksCache.putAll(jwks))
+                .doOnNext(jwks -> {
+                    log.info("获取到 JWKS: {}", jwks);
+                    jwksCache.putAll(jwks);
+                })
                 .doOnError(e -> log.error("获取 JWKS 失败: {}", e.getMessage()));
     }
 
