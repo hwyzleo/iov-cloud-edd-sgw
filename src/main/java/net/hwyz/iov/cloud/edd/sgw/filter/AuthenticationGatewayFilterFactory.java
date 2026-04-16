@@ -16,8 +16,8 @@ import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.math.BigInteger;
@@ -80,7 +80,11 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
             }
             switch (type) {
                 case MOBILE -> {
-                    String token = exchange.getRequest().getHeaders().getFirst(TOKEN.value);
+                    String token = null;
+                    String auth = exchange.getRequest().getHeaders().getFirst(SecurityConstants.AUTHORIZATION_HEADER);
+                    if (StrUtil.isNotBlank(auth)) {
+                        token = auth.substring(SecurityConstants.BEARER_PREFIX.length()).trim();
+                    }
                     if (StrUtil.isBlank(token)) {
                         log.warn("手机客户端[{}]缺失客户端令牌[{}]", clientId, token);
                         exchange.getResponse().getHeaders().add("Content-Type", "application/json");
@@ -91,9 +95,10 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                                         .set("ts", System.currentTimeMillis())
                                         .toString().getBytes())));
                     }
+                    String finalToken = token;
                     return parseToken(token)
                             .flatMap(claims -> handleTokenClaims(exchange, chain, claims))
-                            .onErrorResume(e -> handleTokenError(exchange, chain, token, clientId, e));
+                            .onErrorResume(e -> handleTokenError(exchange, chain, finalToken, clientId, e));
                 }
                 case TBOX -> {
                     String vin = exchange.getRequest().getHeaders().getFirst(VIN.value);
