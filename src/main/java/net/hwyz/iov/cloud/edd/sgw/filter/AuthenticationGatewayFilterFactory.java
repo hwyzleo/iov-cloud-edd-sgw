@@ -162,14 +162,14 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
         }
         log.info("开始获取公钥");
         return fetchJwks()
-                .flatMap(jwks -> {
-                    log.info("获取到 JWKS 数据: keys={}", jwks.keySet());
-                    if (jwks.containsKey("keys") && !((java.util.List<?>) jwks.get("keys")).isEmpty()) {
-                        Map<String, Object> key = (Map<String, Object>) ((java.util.List<?>) jwks.get("keys")).get(0);
-                        return Mono.just(parseRSAPublicKey(key));
+                .flatMap(response -> {
+                    Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    if (data == null || !data.containsKey("keys") || ((java.util.List<?>) data.get("keys")).isEmpty()) {
+                        log.error("JWKS 格式错误或不包含 keys: {}", response);
+                        return Mono.error(new IllegalStateException("JWKS 中没有找到公钥"));
                     }
-                    log.error("JWKS 格式错误或不包含 keys: {}", jwks);
-                    return Mono.error(new IllegalStateException("JWKS 中没有找到公钥"));
+                    Map<String, Object> key = (Map<String, Object>) data.get("keys");
+                    return Mono.just(parseRSAPublicKey(key));
                 })
                 .doOnNext(publicKey -> this.cachedPublicKey = publicKey);
     }
