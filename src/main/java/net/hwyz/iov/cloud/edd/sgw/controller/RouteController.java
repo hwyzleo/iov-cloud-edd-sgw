@@ -31,7 +31,7 @@ public class RouteController {
      */
     @PostMapping
     public void add(@RequestBody @Validated TspSgwRoute route) {
-        logger.info("新增路由[{}]", route.getTargetUri());
+        log.info("新增路由[{}]", route.getTargetUri());
         dynamicRouteService.add(defaultRouteDefinitionRepository.addRoute(String.valueOf(route.getId()), route.getPredicates(),
                 route.getFilters(), route.getTargetType(), route.getTargetUri()));
     }
@@ -43,7 +43,7 @@ public class RouteController {
      */
     @PutMapping
     public void update(@RequestBody @Validated TspSgwRoute route) {
-        logger.info("更新路由[{}]", route.getTargetUri());
+        log.info("更新路由[{}]", route.getTargetUri());
         dynamicRouteService.update(defaultRouteDefinitionRepository.addRoute(String.valueOf(route.getId()), route.getPredicates(),
                 route.getFilters(), route.getTargetType(), route.getTargetUri()));
     }
@@ -55,7 +55,7 @@ public class RouteController {
      */
     @DeleteMapping("/{ids}")
     public void delete(@PathVariable Long[] ids) {
-        logger.info("删除路由[{}]", Arrays.toString(ids));
+        log.info("删除路由[{}]", Arrays.toString(ids));
         dynamicRouteService.delete(ids);
     }
 
@@ -65,7 +65,7 @@ public class RouteController {
      */
     @PostMapping("/refresh")
     public void refresh() {
-        logger.info("刷新路由配置");
+        log.info("刷新路由配置");
         dynamicRouteService.refresh();
     }
 

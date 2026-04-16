@@ -26,7 +26,7 @@ public class AuthorizationGatewayFilterFactory extends AbstractGatewayFilterFact
     @Override
     public GatewayFilter apply(Config config) {
         return (exchange, chain) -> {
-            logger.debug("Header:[{}]", JSONUtil.parse(exchange.getRequest().getHeaders()).toJSONString(0));
+            log.debug("Header:[{}]", JSONUtil.parse(exchange.getRequest().getHeaders()).toJSONString(0));
             return chain.filter(exchange);
         };
     }

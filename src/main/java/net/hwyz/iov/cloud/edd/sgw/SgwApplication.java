@@ -14,12 +14,12 @@ import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 @Slf4j
 @EnableDiscoveryClient
 @SpringBootApplication
-public class Application {
+public class SgwApplication {
 
     public static void main(String[] args) {
         System.setProperty("nacos.logging.default.config.enabled","false");
-        SpringApplication.run(Application.class, args);
-        logger.info("应用启动完成");
+        SpringApplication.run(SgwApplication.class, args);
+        log.info("应用启动完成");
     }
 
 }

@@ -69,9 +69,9 @@ public class DefaultRouteDefinitionRepository implements RouteDefinitionReposito
                         routePo.getTargetType(), routePo.getTargetUri()));
             });
             routeDefinitionList = list;
-            logger.info("路由配置已加载,加载条数:{}", routeDefinitionList.size());
+            log.info("路由配置已加载,加载条数:{}", routeDefinitionList.size());
         } catch (Exception e) {
-            logger.error("从文件加载路由配置异常", e);
+            log.error("从文件加载路由配置异常", e);
         }
     }
 
