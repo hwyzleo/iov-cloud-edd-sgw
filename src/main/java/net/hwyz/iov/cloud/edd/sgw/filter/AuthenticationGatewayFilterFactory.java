@@ -206,8 +206,20 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
             }
             String n = (String) jwk.get("n");
             String e = (String) jwk.get("e");
-            BigInteger modulus = new BigInteger(1, Base64.getUrlDecoder().decode(n));
-            BigInteger exponent = new BigInteger(1, Base64.getUrlDecoder().decode(e));
+            byte[] nBytes = Base64.getUrlDecoder().decode(n);
+            byte[] eBytes = Base64.getUrlDecoder().decode(e);
+            if (nBytes.length > 0 && nBytes[0] == 0) {
+                byte[] trimmed = new byte[nBytes.length - 1];
+                System.arraycopy(nBytes, 1, trimmed, 0, trimmed.length);
+                nBytes = trimmed;
+            }
+            if (eBytes.length > 0 && eBytes[0] == 0) {
+                byte[] trimmed = new byte[eBytes.length - 1];
+                System.arraycopy(eBytes, 1, trimmed, 0, trimmed.length);
+                eBytes = trimmed;
+            }
+            BigInteger modulus = new BigInteger(1, nBytes);
+            BigInteger exponent = new BigInteger(1, eBytes);
             KeyFactory keyFactory = KeyFactory.getInstance("RSA");
             RSAPublicKeySpec spec = new RSAPublicKeySpec(modulus, exponent);
             return (RSAPublicKey) keyFactory.generatePublic(spec);
