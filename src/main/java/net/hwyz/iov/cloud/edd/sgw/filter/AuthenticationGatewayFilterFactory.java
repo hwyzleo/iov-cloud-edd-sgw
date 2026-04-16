@@ -65,9 +65,13 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
             }
             switch (ClientType.valueOf(clientType)) {
                 case MOBILE -> {
-                    String token = exchange.getRequest().getHeaders().getFirst(TOKEN.value);
+                    String token = null;
+                    String auth = exchange.getRequest().getHeaders().getFirst(SecurityConstants.AUTHORIZATION_HEADER);
+                    if (StrUtil.isNotBlank(auth)) {
+                        token = auth.substring(SecurityConstants.BEARER_PREFIX.length()).trim();
+                    }
                     if (StrUtil.isBlank(token)) {
-                        log.warn("手机客户端[{}]缺失客户端令牌[{}]", clientId, token);
+                        log.warn("手机客户端[{}]缺失客户端令牌", clientId);
                         exchange.getResponse().getHeaders().add("Content-Type", "application/json");
                         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                                 .bufferFactory().wrap(new JSONObject()
