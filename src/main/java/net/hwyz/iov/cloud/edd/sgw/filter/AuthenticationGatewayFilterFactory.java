@@ -12,9 +12,11 @@ import net.hwyz.iov.cloud.framework.common.enums.ClientType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
+import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.factory.AbstractGatewayFilterFactory;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
@@ -63,15 +65,24 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                                 .set("ts", System.currentTimeMillis())
                                 .toString().getBytes())));
             }
-            switch (ClientType.valueOf(clientType)) {
+            ClientType type;
+            try {
+                type = ClientType.valueOf(clientType);
+            } catch (IllegalArgumentException e) {
+                log.warn("未知客户端类型[{}]", clientType);
+                exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
+                        .bufferFactory().wrap(new JSONObject()
+                                .set("code", 100000)
+                                .set("message", "未知客户端类型")
+                                .set("ts", System.currentTimeMillis())
+                                .toString().getBytes())));
+            }
+            switch (type) {
                 case MOBILE -> {
-                    String token = null;
-                    String auth = exchange.getRequest().getHeaders().getFirst(SecurityConstants.AUTHORIZATION_HEADER);
-                    if (StrUtil.isNotBlank(auth)) {
-                        token = auth.substring(SecurityConstants.BEARER_PREFIX.length()).trim();
-                    }
+                    String token = exchange.getRequest().getHeaders().getFirst(TOKEN.value);
                     if (StrUtil.isBlank(token)) {
-                        log.warn("手机客户端[{}]缺失客户端令牌", clientId);
+                        log.warn("手机客户端[{}]缺失客户端令牌[{}]", clientId, token);
                         exchange.getResponse().getHeaders().add("Content-Type", "application/json");
                         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                                 .bufferFactory().wrap(new JSONObject()
@@ -81,37 +92,8 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                                         .toString().getBytes())));
                     }
                     return parseToken(token)
-                            .flatMap(claims -> {
-                                String userId = claims.getSubject();
-                                String clientIdFromToken = claims.get(SecurityConstants.CLIENT_ID, String.class);
-                                String scope = claims.get(SecurityConstants.SCOPE, String.class);
-                                String sessionId = claims.get(SecurityConstants.SESSION_ID, String.class);
-                                String deviceId = claims.get(SecurityConstants.DEVICE_ID, String.class);
-
-                                log.info("解析JWT Token成功 - userId:{}, clientId:{}, scope:{}, sessionId:{}, deviceId:{}",
-                                        userId, clientIdFromToken, scope, sessionId, deviceId);
-
-                                ServerHttpRequest.Builder requestBuilder = exchange.getRequest().mutate();
-                                requestBuilder.header(SecurityConstants.USER_ID, userId != null ? userId : "");
-                                requestBuilder.header(SecurityConstants.CLIENT_ID, clientIdFromToken != null ? clientIdFromToken : "");
-                                requestBuilder.header(SecurityConstants.SCOPE, scope != null ? scope : "");
-                                requestBuilder.header(SecurityConstants.SESSION_ID, sessionId != null ? sessionId : "");
-                                if (deviceId != null && !deviceId.isEmpty()) {
-                                    requestBuilder.header(SecurityConstants.DEVICE_ID, deviceId);
-                                }
-
-                                return chain.filter(exchange.mutate().request(requestBuilder.build()).build());
-                            })
-                            .onErrorResume(e -> {
-                                log.warn("JWT Token解析失败 - clientId:{}, error:{}", clientId, e.getMessage());
-                                exchange.getResponse().getHeaders().add("Content-Type", "application/json");
-                                return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
-                                        .bufferFactory().wrap(new JSONObject()
-                                                .set("code", 100000)
-                                                .set("message", "令牌无效或已过期")
-                                                .set("ts", System.currentTimeMillis())
-                                                .toString().getBytes())));
-                            });
+                            .flatMap(claims -> handleTokenClaims(exchange, chain, claims))
+                            .onErrorResume(e -> handleTokenError(exchange, chain, token, clientId, e));
                 }
                 case TBOX -> {
                     String vin = exchange.getRequest().getHeaders().getFirst(VIN.value);
@@ -128,15 +110,61 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                     return chain.filter(exchange);
                 }
             }
-            log.warn("未知客户端类型[{}]", clientType);
-            exchange.getResponse().getHeaders().add("Content-Type", "application/json");
-            return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
-                    .bufferFactory().wrap(new JSONObject()
-                            .set("code", 100000)
-                            .set("message", "未知客户端类型")
-                            .set("ts", System.currentTimeMillis())
-                            .toString().getBytes())));
+            return chain.filter(exchange);
         };
+    }
+
+    private Mono<Void> handleTokenClaims(ServerWebExchange exchange, GatewayFilterChain chain, Claims claims) {
+        String userId = claims.getSubject();
+        String clientIdFromToken = claims.get(SecurityConstants.CLIENT_ID, String.class);
+        String scope = claims.get(SecurityConstants.SCOPE, String.class);
+        String sessionId = claims.get(SecurityConstants.SESSION_ID, String.class);
+        String deviceId = claims.get(SecurityConstants.DEVICE_ID, String.class);
+
+        log.info("解析JWT Token成功 - userId:{}, clientId:{}, scope:{}, sessionId:{}, deviceId:{}",
+                userId, clientIdFromToken, scope, sessionId, deviceId);
+
+        ServerHttpRequest.Builder requestBuilder = exchange.getRequest().mutate();
+        requestBuilder.header(SecurityConstants.USER_ID, userId != null ? userId : "");
+        requestBuilder.header(SecurityConstants.CLIENT_ID, clientIdFromToken != null ? clientIdFromToken : "");
+        requestBuilder.header(SecurityConstants.SCOPE, scope != null ? scope : "");
+        requestBuilder.header(SecurityConstants.SESSION_ID, sessionId != null ? sessionId : "");
+        if (deviceId != null && !deviceId.isEmpty()) {
+            requestBuilder.header(SecurityConstants.DEVICE_ID, deviceId);
+        }
+
+        return chain.filter(exchange.mutate().request(requestBuilder.build()).build());
+    }
+
+    private Mono<Void> handleTokenError(ServerWebExchange exchange, GatewayFilterChain chain, String token, String clientId, Throwable e) {
+        String errorMsg = e.getMessage();
+        log.warn("JWT Token解析失败 - clientId:{}, error:{}", clientId, errorMsg);
+
+        if (errorMsg != null && errorMsg.contains("signature")) {
+            log.warn("签名验证失败，可能是公钥已过期，清除缓存并重试");
+            cachedPublicKey = null;
+            jwksCache.clear();
+            return parseToken(token)
+                    .flatMap(claims -> handleTokenClaims(exchange, chain, claims))
+                    .onErrorResume(retryE -> {
+                        log.warn("重试JWT Token解析也失败 - clientId:{}, error:{}", clientId, retryE.getMessage());
+                        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                        return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
+                                .bufferFactory().wrap(new JSONObject()
+                                        .set("code", 100000)
+                                        .set("message", "令牌无效或已过期")
+                                        .set("ts", System.currentTimeMillis())
+                                        .toString().getBytes())));
+                    });
+        }
+
+        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+        return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
+                .bufferFactory().wrap(new JSONObject()
+                        .set("code", 100000)
+                        .set("message", "令牌无效或已过期")
+                        .set("ts", System.currentTimeMillis())
+                        .toString().getBytes())));
     }
 
     @SuppressWarnings("unchecked")
