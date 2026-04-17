@@ -7,6 +7,7 @@ import io.jsonwebtoken.Jwts;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.hwyz.iov.cloud.framework.common.constant.CustomHeaders;
 import net.hwyz.iov.cloud.framework.common.constant.SecurityConstants;
 import net.hwyz.iov.cloud.framework.common.enums.ClientType;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,9 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static net.hwyz.iov.cloud.framework.common.enums.CustomHeaders.*;
-
-
 @Slf4j
 @Component
 public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFactory<AuthenticationGatewayFilterFactory.Config> {
@@ -53,11 +51,11 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
     @Override
     public GatewayFilter apply(Config config) {
         return (exchange, chain) -> {
-            String clientType = exchange.getRequest().getHeaders().getFirst(CLIENT_TYPE.value);
-            String clientId = exchange.getRequest().getHeaders().getFirst(CLIENT_ID.value);
+            String clientType = exchange.getRequest().getHeaders().getFirst(CustomHeaders.CLIENT_TYPE);
+            String clientId = exchange.getRequest().getHeaders().getFirst(CustomHeaders.CLIENT_ID);
             if (StrUtil.isBlank(clientType) || StrUtil.isBlank(clientId)) {
                 log.warn("缺失客户端类型[{}]或客户端ID[{}]", clientType, clientId);
-                exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
                 return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                         .bufferFactory().wrap(new JSONObject()
                                 .set("code", 100000)
@@ -70,7 +68,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                 type = ClientType.valueOf(clientType);
             } catch (IllegalArgumentException e) {
                 log.warn("未知客户端类型[{}]", clientType);
-                exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
                 return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                         .bufferFactory().wrap(new JSONObject()
                                 .set("code", 100000)
@@ -87,7 +85,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                     }
                     if (StrUtil.isBlank(token)) {
                         log.warn("手机客户端[{}]缺失客户端令牌[{}]", clientId, token);
-                        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                        exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
                         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                                 .bufferFactory().wrap(new JSONObject()
                                         .set("code", 100000)
@@ -101,10 +99,10 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                             .onErrorResume(e -> handleTokenError(exchange, chain, finalToken, clientId, e));
                 }
                 case TBOX -> {
-                    String vin = exchange.getRequest().getHeaders().getFirst(VIN.value);
+                    String vin = exchange.getRequest().getHeaders().getFirst(CustomHeaders.VIN);
                     if (StrUtil.isBlank(vin)) {
                         log.warn("车联终端[{}]缺失车架号[{}]", clientId, vin);
-                        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                        exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
                         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                                 .bufferFactory().wrap(new JSONObject()
                                         .set("code", 100000)
@@ -163,7 +161,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                     });
         }
 
-        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+        exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                 .bufferFactory().wrap(new JSONObject()
                         .set("code", 100000)
