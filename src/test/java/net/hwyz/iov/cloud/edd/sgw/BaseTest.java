@@ -1,7 +1,7 @@
 package net.hwyz.iov.cloud.edd.sgw;
 
 import cn.hutool.json.JSONUtil;
-import net.hwyz.iov.cloud.framework.common.enums.CustomHeaders;
+import net.hwyz.iov.cloud.framework.common.constant.CustomHeaders;
 import org.junit.jupiter.api.BeforeAll;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
@@ -25,11 +25,10 @@ public class BaseTest {
      */
     protected HttpHeaders newHttpHeader() {
         Map<String, Object> map = new HashMap<>(2);
-        map.put(CustomHeaders.CLIENT_ID.value, "clientId");
+        map.put(CustomHeaders.CLIENT_ID, "clientId");
         map.put("uid", "uid");
         HttpHeaders headers = new HttpHeaders();
-        headers.add(CustomHeaders.CLIENT_ID.value, "clientId");
-        headers.add(CustomHeaders.CLIENT_ACCOUNT.value, JSONUtil.toJsonStr(map));
+        headers.add(CustomHeaders.CLIENT_ID, "clientId");
         return headers;
     }
 
