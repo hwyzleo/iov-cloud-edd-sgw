@@ -68,3 +68,7 @@ target/
 ### mybatisplus ###
 **/templates/*.ftl
 MybatisPlusGenerator.java
+
+.opencode
+graphify-out
+AGENTS.md
