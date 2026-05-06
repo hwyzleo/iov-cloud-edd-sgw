@@ -42,8 +42,8 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
         super(Config.class);
     }
 
-    private static final String JWKS_URI = "lb://sec-ciam/api/open/v1/oidc/jwks";
-    private static final String ISSUER = "https://account.openiov.com";
+    private static final String JWKS_URI = "lb://sec-ciam/api/open/oidc/v1/jwks";
+    private static final String ISSUER = "https://account.openiov.top";
 
     private RSAPublicKey cachedPublicKey;
     private final Map<String, Object> jwksCache = new ConcurrentHashMap<>();
