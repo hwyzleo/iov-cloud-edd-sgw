@@ -119,22 +119,20 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
 
     private Mono<Void> handleTokenClaims(ServerWebExchange exchange, GatewayFilterChain chain, Claims claims) {
         String userId = claims.getSubject();
-        String clientIdFromToken = claims.get(SecurityConstants.CLIENT_ID, String.class);
+        String clientId = claims.get(SecurityConstants.CLIENT_ID, String.class);
         String scope = claims.get(SecurityConstants.SCOPE, String.class);
         String sessionId = claims.get(SecurityConstants.SESSION_ID, String.class);
         String deviceId = claims.get(SecurityConstants.DEVICE_ID, String.class);
 
         log.info("解析JWT Token成功 - userId:{}, clientId:{}, scope:{}, sessionId:{}, deviceId:{}",
-                userId, clientIdFromToken, scope, sessionId, deviceId);
+                userId, clientId, scope, sessionId, deviceId);
 
         ServerHttpRequest.Builder requestBuilder = exchange.getRequest().mutate();
-        requestBuilder.header(SecurityConstants.USER_ID, userId != null ? userId : "");
-        requestBuilder.header(SecurityConstants.CLIENT_ID, clientIdFromToken != null ? clientIdFromToken : "");
-        requestBuilder.header(SecurityConstants.SCOPE, scope != null ? scope : "");
-        requestBuilder.header(SecurityConstants.SESSION_ID, sessionId != null ? sessionId : "");
-        if (deviceId != null && !deviceId.isEmpty()) {
-            requestBuilder.header(SecurityConstants.DEVICE_ID, deviceId);
-        }
+        requestBuilder.header(CustomHeaders.USER_ID, userId != null ? userId : "");
+        requestBuilder.header(CustomHeaders.CLIENT_ID, clientId != null ? clientId : "");
+        requestBuilder.header(CustomHeaders.SCOPE, scope != null ? scope : "");
+        requestBuilder.header(CustomHeaders.SESSION_ID, sessionId != null ? sessionId : "");
+        requestBuilder.header(CustomHeaders.DEVICE_ID, deviceId != null ? deviceId : "");
 
         return chain.filter(exchange.mutate().request(requestBuilder.build()).build());
     }
@@ -151,7 +149,7 @@ public class AuthenticationGatewayFilterFactory extends AbstractGatewayFilterFac
                     .flatMap(claims -> handleTokenClaims(exchange, chain, claims))
                     .onErrorResume(retryE -> {
                         log.warn("重试JWT Token解析也失败 - clientId:{}, error:{}", clientId, retryE.getMessage());
-                        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+                        exchange.getResponse().getHeaders().add(CustomHeaders.CONTENT_TYPE, "application/json");
                         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse()
                                 .bufferFactory().wrap(new JSONObject()
                                         .set("code", 100000)
