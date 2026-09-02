@@ -1,10 +1,13 @@
-DROP TABLE IF EXISTS `db_sgw`.`tb_route`;
-CREATE TABLE `db_sgw`.`tb_route`
+-- V1: 初始化数据库表结构
+-- 服务网关初始化脚本（当前仅一张路由表）
+
+-- 路由表
+CREATE TABLE IF NOT EXISTS `tb_route`
 (
     `id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键',
     `predicates`  JSON         NOT NULL COMMENT '断言集合',
     `filters`     JSON                  DEFAULT NULL COMMENT '过滤器集合',
-    `target_type` VARCHAR(255) NOT NULL COMMENT '目标类型',
+    `target_type` VARCHAR(255) NOT NULL COMMENT '目标类型：LB、HTTP、HTTPS、WS、FORWARD',
     `target_uri`  VARCHAR(255) NOT NULL COMMENT '目标URI',
     `sort`        INT          NOT NULL COMMENT '排序',
     `description` VARCHAR(255)          DEFAULT NULL COMMENT '备注',
