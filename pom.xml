@@ -3,7 +3,6 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <packaging>jar</packaging>
 
     <parent>
         <groupId>net.hwyz.iov.cloud.parent</groupId>
@@ -12,93 +11,21 @@
     </parent>
 
     <groupId>net.hwyz.iov.cloud.edd</groupId>
-    <artifactId>service-gateway</artifactId>
+    <artifactId>edd-sgw</artifactId>
     <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
     <description>服务网关</description>
-    <name>service-gateway</name>
+    <name>edd-sgw</name>
+
+    <modules>
+        <module>edd-sgw-api</module>
+        <module>edd-sgw-service</module>
+    </modules>
 
     <properties>
-        <edd-mpt.version>0.0.1-SNAPSHOT</edd-mpt.version>
+        <resilience4j.version>2.1.0</resilience4j.version>
+        <jjwt.version>0.12.5</jjwt.version>
+        <mybatis-plus.version>3.5.3.1</mybatis-plus.version>
     </properties>
-
-    <dependencies>
-        <!-- SpringCloud网关 -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-gateway</artifactId>
-        </dependency>
-
-        <!-- 后台管理门户 -->
-        <dependency>
-            <groupId>net.hwyz.iov.cloud.edd</groupId>
-            <artifactId>edd-mpt-api</artifactId>
-            <version>${edd-mpt.version}</version>
-        </dependency>
-
-        <!-- 流量控制相关 -->
-        <dependency>
-            <groupId>com.alibaba.cloud</groupId>
-            <artifactId>spring-cloud-starter-alibaba-sentinel</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.alibaba.cloud</groupId>
-            <artifactId>spring-cloud-alibaba-sentinel-gateway</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.alibaba.csp</groupId>
-            <artifactId>sentinel-datasource-nacos</artifactId>
-        </dependency>
-
-        <!-- 健康状态 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-
-        <!-- 负载均衡 -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-loadbalancer</artifactId>
-        </dependency>
-
-        <!-- 框架：通用 -->
-        <dependency>
-            <groupId>net.hwyz.iov.cloud.framework</groupId>
-            <artifactId>framework-common</artifactId>
-        </dependency>
-
-        <!-- 框架: MySQL -->
-        <dependency>
-            <groupId>net.hwyz.iov.cloud.framework</groupId>
-            <artifactId>framework-mysql-starter</artifactId>
-        </dependency>
-
-        <!-- Java Servlet -->
-        <dependency>
-            <groupId>jakarta.servlet</groupId>
-            <artifactId>jakarta.servlet-api</artifactId>
-            <scope>provided</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>2.6.1</version>
-                <configuration>
-                    <executable>true</executable>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>repackage</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
 
 </project>

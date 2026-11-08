@@ -13,11 +13,19 @@ pipeline {
     }
 
     environment {
-        // 构建文件
+        // Maven
         MAVEN_SETTINGS = '/var/jenkins_home/.m2/settings.xml'
         MAVEN_ARCHIVE  = '/var/jenkins_home/apache-maven-3.6.3-bin.tar.gz'
-        DOCKERFILE     = '/var/jenkins_home/GwDockerfile'
-        BUILD_CONTEXT  = '.'
+        REPO_ID       = 'snapshots'
+        REPO_URL      = "http://${env.MAVEN_URL}/repository/maven-snapshots/"
+
+        // 项目目录（多模块：edd-sgw-api + edd-sgw-service）
+        SGW_DIR_KEY  = "${env.DIR_KEY ?: 'edd-sgw'}"
+        DIR_API      = "${SGW_DIR_KEY}-api"
+        DIR_SERVICE  = "${SGW_DIR_KEY}-service"
+        // 默认复用平台多模块 ServiceDockerfile；如网关需要专用运行时，可在 Job 环境变量
+        // 设置 SGW_DOCKERFILE=/var/jenkins_home/GwDockerfile（并确保其按 service 模块产物构建）
+        DOCKERFILE   = "${env.SGW_DOCKERFILE ?: '/var/jenkins_home/ServiceDockerfile'}"
 
         // Docker/TCR
         PROJECT_NAME = "${env.JOB_BASE_NAME}"
@@ -35,10 +43,21 @@ pipeline {
 
     parameters {
         booleanParam(
+            name: 'DEPLOY_API',
+            defaultValue: false,
+            description: '是否构建并发布 API（MPT 依赖 edd-sgw-api，首次发布或契约变更时必须执行）'
+        )
+
+        booleanParam(
             name: 'DOCKER_NO_CACHE',
             defaultValue: false,
             description: '构建镜像时是否禁用 Docker 缓存'
         )
+    }
+
+    tools {
+        jdk   'temurin-17'
+        maven 'M3'
     }
 
     stages {
@@ -51,20 +70,53 @@ pipeline {
                     echo "Jenkins 用户：$(whoami)"
                     echo "项目名称：${PROJECT_NAME}"
                     echo "镜像名称：${IMAGE_NAME}"
+                    echo "API 目录：${DIR_API}"
+                    echo "Service 目录：${DIR_SERVICE}"
                     echo "Dockerfile：${DOCKERFILE}"
-                    echo "构建上下文：${BUILD_CONTEXT}"
                     echo "Docker 网络：${DOCKER_NETWORK}"
 
+                    java -version
+                    mvn -version
                     docker version
 
                     test -f "${MAVEN_SETTINGS}"
                     test -f "${MAVEN_ARCHIVE}"
                     test -f "${DOCKERFILE}"
                     test -f "${NACOS_ENV_FILE}"
+                    test -d "${DIR_API}"
+                    test -f "${DIR_API}/pom.xml"
+                    test -d "${DIR_SERVICE}"
+                    test -f "${DIR_SERVICE}/pom.xml"
 
                     docker network inspect \
                         "${DOCKER_NETWORK}" >/dev/null
                 '''
+            }
+        }
+
+        stage('构建并发布 API') {
+            when {
+                expression {
+                    return params.DEPLOY_API
+                }
+            }
+
+            steps {
+                dir("${DIR_API}") {
+                    sh '''
+                        set -eu
+
+                        echo '============================== 构建并发布 API =============================='
+
+                        mvn \
+                            --settings "${MAVEN_SETTINGS}" \
+                            --batch-mode \
+                            --update-snapshots \
+                            clean deploy \
+                            -DskipTests \
+                            -DaltDeploymentRepository="${REPO_ID}::default::${REPO_URL}"
+                    '''
+                }
             }
         }
 
@@ -80,13 +132,12 @@ pipeline {
 
                         echo '============================== 构建网关镜像 =============================='
 
-                        SETTINGS_TARGET='settings.xml'
-                        MAVEN_TARGET='apache-maven-3.6.3-bin.tar.gz'
+                        # 多模块：仅以 service 模块作为镜像构建上下文
+                        SETTINGS_TARGET='${DIR_SERVICE}/settings.xml'
+                        MAVEN_TARGET='${DIR_SERVICE}/apache-maven-3.6.3-bin.tar.gz'
 
                         cleanup_build_files() {
-                            rm -f \
-                                "\${SETTINGS_TARGET}" \
-                                "\${MAVEN_TARGET}"
+                            rm -f "\${SETTINGS_TARGET}" "\${MAVEN_TARGET}"
                         }
 
                         trap cleanup_build_files EXIT
@@ -99,7 +150,7 @@ pipeline {
                             ${noCacheArg} \
                             --tag '${IMAGE_NAME}' \
                             --file '${DOCKERFILE}' \
-                            '${BUILD_CONTEXT}'
+                            '${DIR_SERVICE}'
 
                         docker image inspect \
                             '${IMAGE_NAME}' >/dev/null
