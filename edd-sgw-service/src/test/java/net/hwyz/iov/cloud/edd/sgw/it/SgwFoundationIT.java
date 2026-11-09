@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 服务网关基础设计集成测试（EDD-SGW-DSN-CR-001）。
+ * 服务网关基础设计集成测试（EDD-SGW-DSN-CR-001）；身份头分类与来源标记见 EDD-SGW-DSN-CR-002。
  * <p>
  * 使用本机 MySQL(db_sgw_it) + Redis + 本地模拟上游与 JWKS。
  *
@@ -164,39 +164,59 @@ class SgwFoundationIT {
                 .header("Authorization", "Bearer " + token("MOBILE", "VIN1",
                         "vehicle.read perm:edd:vehicle:read"))
                 .header("X-Client-Type", "MOBILE")
+                .header("X-Client-Id", "client-1")
+                .header("X-Device-Id", "forged-device")
                 .header("X-User-Id", "forged-user")
                 .header("X-Vin", "FORGED-VIN")
                 .header("X-Scope", "forged.scope")
+                .header("X-Identity-Source", "DECLARED")
                 .exchange().expectBody(String.class).returnResult();
         assertThat(response.getStatus().value()).as(response.getResponseBody()).isEqualTo(200);
         assertThat(response.getResponseBody()).isEqualTo("ok");
         assertThat(response.getResponseHeaders().getFirst("X-Echo-User")).isEqualTo("user-1");
         assertThat(response.getResponseHeaders().getFirst("X-Echo-Vin")).isEqualTo("VIN1");
         assertThat(response.getResponseHeaders().getFirst("X-Echo-Scope")).doesNotContain("forged");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Device")).isEqualTo("device-1");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Client-Id")).isEqualTo("client-1");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Client-Type")).isEqualTo("MOBILE");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Identity-Source")).isEqualTo("CIAM");
         assertThat(response.getResponseHeaders().getFirst("X-Request-Id")).isNotBlank();
     }
 
     @Test
     @Order(4)
-    @DisplayName("匿名路由不传播任何认证身份")
-    void anonymousRouteStripsIdentity() {
+    @DisplayName("匿名路由透传声明型客户端设备元数据并标记身份来源，不传播认证身份")
+    void anonymousRouteKeepsDeclaredMetadata() {
         String routeCode = "anonymous-echo-" + COUNTER.incrementAndGet();
         createRoute(Map.of(
                 "routeCode", routeCode,
                 "routeName", "匿名回显",
                 "priority", 100,
                 "enabled", true,
-                "match", Map.of("paths", List.of("/echo-anon"), "methods", List.of("GET")),
+                "match", Map.of("paths", List.of("/echo-anon"), "methods", List.of("GET"),
+                        "clientTypes", List.of("MOBILE")),
                 "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo-anon")));
         publishAndWait();
 
         EntityExchangeResult<String> response = client.get().uri("/echo-anon")
+                .header("X-Client-Id", "iphone-capp")
+                .header("X-Client-Type", "MOBILE")
+                .header("X-Device-Id", "device-declared")
+                .header("X-Platform", "ios")
+                .header("X-Identity-Source", "CIAM")
                 .header("X-User-Id", "forged-user")
                 .header("X-Vin", "FORGED-VIN")
+                .header("X-Scope", "forged.scope")
+                .header("X-Internal-Client", "mpt")
                 .exchange().expectBody(String.class).returnResult();
-        assertThat(response.getStatus().value()).isEqualTo(200);
+        assertThat(response.getStatus().value()).as(response.getResponseBody()).isEqualTo(200);
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Client-Id")).isEqualTo("iphone-capp");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Client-Type")).isEqualTo("MOBILE");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Device")).isEqualTo("device-declared");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Identity-Source")).isEqualTo("DECLARED");
         assertThat(response.getResponseHeaders().getFirst("X-Echo-User")).isEqualTo("none");
         assertThat(response.getResponseHeaders().getFirst("X-Echo-Vin")).isEqualTo("none");
+        assertThat(response.getResponseHeaders().getFirst("X-Echo-Scope")).isEqualTo("none");
     }
 
     @Test
@@ -622,9 +642,17 @@ class SgwFoundationIT {
                     String user = request.requestHeaders().get("X-User-Id", "none");
                     String vin = request.requestHeaders().get("X-Vin", "none");
                     String scope = request.requestHeaders().get("X-Scope", "none");
+                    String device = request.requestHeaders().get("X-Device-Id", "none");
+                    String clientId = request.requestHeaders().get("X-Client-Id", "none");
+                    String clientType = request.requestHeaders().get("X-Client-Type", "none");
+                    String identitySource = request.requestHeaders().get("X-Identity-Source", "none");
                     response.header("X-Echo-User", user);
                     response.header("X-Echo-Vin", vin);
                     response.header("X-Echo-Scope", scope);
+                    response.header("X-Echo-Device", device);
+                    response.header("X-Echo-Client-Id", clientId);
+                    response.header("X-Echo-Client-Type", clientType);
+                    response.header("X-Echo-Identity-Source", identitySource);
                     if (path.startsWith("/slow")) {
                         return response.sendString(Mono.delay(Duration.ofSeconds(2)).map(ignored -> "slow")).then();
                     }
