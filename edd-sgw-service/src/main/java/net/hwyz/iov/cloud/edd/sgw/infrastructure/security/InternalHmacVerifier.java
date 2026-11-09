@@ -1,5 +1,6 @@
 package net.hwyz.iov.cloud.edd.sgw.infrastructure.security;
 
+import lombok.extern.slf4j.Slf4j;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
 import net.hwyz.iov.cloud.edd.sgw.config.SgwProperties;
@@ -20,6 +21,7 @@ import java.util.HexFormat;
  *
  * @author hwyz_leo
  */
+@Slf4j
 @Component
 public class InternalHmacVerifier {
 
@@ -46,6 +48,9 @@ public class InternalHmacVerifier {
         String nonce = request.getHeaders().getFirst(internal.getNonceHeader());
         String signature = request.getHeaders().getFirst(internal.getSignatureHeader());
         if (client == null || timestamp == null || nonce == null || signature == null) {
+            log.warn("内部请求缺少签名头: method={}, path={}, client={}, timestamp={}, nonce={}, signature={}",
+                    request.getMethod().name(), request.getURI().getRawPath(),
+                    client, timestamp, nonce, signature);
             return Mono.error(new SgwException(SgwErrorCode.UNAUTHORIZED, "缺少内部请求签名头"));
         }
         String secret = internal.getClients().get(client);
@@ -71,8 +76,16 @@ public class InternalHmacVerifier {
         String expected = hmacSha256Hex(secret, canonical);
         if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
                 signature.trim().toLowerCase().getBytes(StandardCharsets.UTF_8))) {
+            log.warn("内部请求签名不匹配: client={}, method={}, path={}, bodyHash={}, timestamp={}, nonce={},\n"
+                            + "  期望签名(服务网关侧)={}, \n  实际签名(调用方)={}, \n  密钥指纹={},\n"
+                            + "  签名串=[{}]",
+                    client.trim(), request.getMethod().name(), request.getURI().getRawPath(), bodyHash,
+                    timestamp.trim(), nonce.trim(), expected, signature.trim(), fingerprint(secret),
+                    canonical.replace("\n", "|"));
             return Mono.error(new SgwException(SgwErrorCode.UNAUTHORIZED, "内部请求签名无效"));
         }
+        log.debug("内部请求签名校验通过: client={}, path={}, 密钥指纹={}",
+                client.trim(), request.getURI().getRawPath(), fingerprint(secret));
         String nonceKey = "sgw:admin:nonce:" + client.trim() + ":" + nonce.trim();
         return redisTemplate.opsForValue()
                 .setIfAbsent(nonceKey, "1", Duration.ofSeconds(internal.getNonceTtlSeconds()))
@@ -85,6 +98,26 @@ public class InternalHmacVerifier {
                 })
                 .onErrorMap(e -> e instanceof SgwException ? e
                         : new SgwException(SgwErrorCode.UPSTREAM_UNAVAILABLE, "内部请求防重放不可用", e));
+    }
+
+    /**
+     * 密钥指纹（SHA-256 前 8 位十六进制）。
+     * <p>
+     * 仅用于两端比对密钥是否一致，不泄露密钥本身；排查完成后建议移除相关日志。
+     *
+     * @param secret 密钥
+     * @return 指纹
+     */
+    public static String fingerprint(String secret) {
+        if (secret == null || secret.isBlank()) {
+            return "-empty-";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(secret.getBytes(StandardCharsets.UTF_8))).substring(0, 8);
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 
     /**
