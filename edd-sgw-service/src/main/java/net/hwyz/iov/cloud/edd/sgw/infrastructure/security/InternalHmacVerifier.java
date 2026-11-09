@@ -1,9 +1,12 @@
 package net.hwyz.iov.cloud.edd.sgw.infrastructure.security;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
 import net.hwyz.iov.cloud.edd.sgw.config.SgwProperties;
+import org.springframework.data.redis.connection.ReactiveRedisConnection;
+import org.springframework.data.redis.core.ReactiveRedisCallback;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
@@ -32,6 +35,41 @@ public class InternalHmacVerifier {
     public InternalHmacVerifier(SgwProperties properties, ReactiveStringRedisTemplate redisTemplate) {
         this.properties = properties;
         this.redisTemplate = redisTemplate;
+    }
+
+    /**
+     * 启动时打印已登记内部客户端的密钥指纹，便于与 edd-mpt 日志比对（不泄露密钥本身）。
+     */
+    @PostConstruct
+    void logConfiguredClients() {
+        SgwProperties.Internal internal = properties.getSecurity().getInternal();
+        if (internal.getClients().isEmpty()) {
+            log.warn("未配置任何内部客户端密钥（sgw.security.internal.clients），管理接口将拒绝所有调用");
+            return;
+        }
+        internal.getClients().forEach((client, secret) -> log.info(
+                "内部客户端密钥已加载: client={}, 密钥指纹={}, 密钥长度={}",
+                client, fingerprint(secret), secret == null ? 0 : secret.length()));
+    }
+
+    /**
+     * 启动探测防重放存储（Redis）连通性。
+     * <p>
+     * 配置文件加载顺序（如 bootstrap.yml 未引入 Nacos 的 redis.yaml）会导致落到默认 localhost:6379，
+     * 这里提前暴露，避免直到调用管理接口才返回 SGW-503001。
+     */
+    @PostConstruct
+    void probeReplayStore() {
+        try {
+            redisTemplate.execute((ReactiveRedisCallback<String>) ReactiveRedisConnection::ping)
+                    .doOnNext(pong -> log.info("防重放存储(Redis)连通正常: {}", pong))
+                    .doOnError(e -> log.error("防重放存储(Redis)不可达，内部管理接口将返回 SGW-503001，"
+                            + "请检查 spring.data.redis 配置（Nacos redis.yaml 是否已加载）: {}", e.toString()))
+                    .onErrorResume(e -> Mono.empty())
+                    .subscribe();
+        } catch (RuntimeException e) {
+            log.error("防重放存储(Redis)初始化失败，内部管理接口将返回 SGW-503001: {}", e.toString());
+        }
     }
 
     /**
@@ -96,8 +134,14 @@ public class InternalHmacVerifier {
                     String actor = request.getHeaders().getFirst(internal.getActorHeader());
                     return actor == null || actor.isBlank() ? client.trim() : actor.trim();
                 })
-                .onErrorMap(e -> e instanceof SgwException ? e
-                        : new SgwException(SgwErrorCode.UPSTREAM_UNAVAILABLE, "内部请求防重放不可用", e));
+                .onErrorMap(e -> {
+                    if (e instanceof SgwException) {
+                        return e;
+                    }
+                    log.error("内部请求防重放不可用: client={}, path={}, 原因: {}",
+                            client.trim(), request.getURI().getRawPath(), e.toString(), e);
+                    return new SgwException(SgwErrorCode.UPSTREAM_UNAVAILABLE, "内部请求防重放不可用", e);
+                });
     }
 
     /**

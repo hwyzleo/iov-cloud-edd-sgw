@@ -1,5 +1,6 @@
 package net.hwyz.iov.cloud.edd.sgw.adapter.web;
 
+import lombok.extern.slf4j.Slf4j;
 import net.hwyz.iov.cloud.edd.sgw.common.Json;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
@@ -28,6 +29,7 @@ import java.nio.charset.StandardCharsets;
  *
  * @author hwyz_leo
  */
+@Slf4j
 @Component
 public class AdminSecurityFilter implements WebFilter, Ordered {
 
@@ -55,6 +57,7 @@ public class AdminSecurityFilter implements WebFilter, Ordered {
             return chain.filter(exchange);
         }
         if (properties.getSecurity().getInternal().getClients().isEmpty()) {
+            log.error("内部管理接口拒绝请求: 未配置 sgw.security.internal.clients, path={}", path);
             return responseWriter.write(exchange, SgwErrorCode.FORBIDDEN, "内部管理接口未配置认证密钥");
         }
         return DataBufferUtils.join(exchange.getRequest().getBody(), MAX_CACHED_BODY_BYTES)
@@ -71,8 +74,15 @@ public class AdminSecurityFilter implements WebFilter, Ordered {
                             return chain.filter(withCachedBody(exchange, body));
                         }))
                 .onErrorResume(SgwException.class,
-                        error -> responseWriter.write(exchange, error.errorCode(), error.getMessage()))
-                .onErrorResume(error -> responseWriter.write(exchange, SgwErrorCode.UNAUTHORIZED));
+                        error -> {
+                            log.warn("内部管理请求被拒绝: path={}, code={}, message={}",
+                                    path, error.errorCode().code(), error.getMessage());
+                            return responseWriter.write(exchange, error.errorCode(), error.getMessage());
+                        })
+                .onErrorResume(error -> {
+                    log.error("内部管理请求处理失败: path={}", path, error);
+                    return responseWriter.write(exchange, SgwErrorCode.UNAUTHORIZED);
+                });
     }
 
     private ServerWebExchange withCachedBody(ServerWebExchange exchange, byte[] body) {
