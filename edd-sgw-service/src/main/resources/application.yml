@@ -1,6 +1,3 @@
-server:
-  port: 10803
-
 spring:
   application:
     name: edd-sgw
