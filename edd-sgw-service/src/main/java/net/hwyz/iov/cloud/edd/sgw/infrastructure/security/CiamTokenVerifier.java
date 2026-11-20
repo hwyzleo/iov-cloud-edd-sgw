@@ -31,7 +31,11 @@ import java.util.Map;
 @Component
 public class CiamTokenVerifier {
 
-    private static final List<String> VEHICLE_CLIENT_TYPES = List.of("TBOX", "IDCM", "ADCM");
+    /**
+     * 车辆会话客户端类型白名单：IOV-TSP-DSN-CR-017 将历史 {@code IDCM} 调整为车机 {@code IVI}。
+     * 命中白名单的令牌必须携带 vehicle_id，SGW 会据此注入可信 {@code X-Vin}。
+     */
+    private static final List<String> VEHICLE_CLIENT_TYPES = List.of("TBOX", "IVI", "ADCM");
 
     private final SgwProperties properties;
 
