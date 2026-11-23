@@ -34,6 +34,8 @@ spring:
     validate-on-migrate: true
 
 sgw:
+  runtime:
+    internal-cidrs: 127.0.0.1/32,::1/128
   publication:
     pointer-store: memory
     deadline-seconds: 30

@@ -1,12 +1,15 @@
 package net.hwyz.iov.cloud.edd.sgw.adapter.web;
 
 import lombok.extern.slf4j.Slf4j;
+import net.hwyz.iov.cloud.edd.sgw.api.enums.AccessMode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledRoute;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledSnapshot;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.GovernanceHandler;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.RequestAttributes;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.RouteMatcher;
+import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SgwRouteMetrics;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SnapshotManager;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SourceIpResolver;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.RequestAuthorizer;
@@ -43,15 +46,19 @@ public class SgwRuntimeWebFilter implements WebFilter, Ordered {
 
     private final SgwResponseWriter responseWriter;
 
+    private final SgwRouteMetrics metrics;
+
     public SgwRuntimeWebFilter(SnapshotManager snapshotManager, RouteMatcher routeMatcher,
                                RequestAuthorizer requestAuthorizer, GovernanceHandler governanceHandler,
-                               SourceIpResolver sourceIpResolver, SgwResponseWriter responseWriter) {
+                               SourceIpResolver sourceIpResolver, SgwResponseWriter responseWriter,
+                               SgwRouteMetrics metrics) {
         this.snapshotManager = snapshotManager;
         this.routeMatcher = routeMatcher;
         this.requestAuthorizer = requestAuthorizer;
         this.governanceHandler = governanceHandler;
         this.sourceIpResolver = sourceIpResolver;
         this.responseWriter = responseWriter;
+        this.metrics = metrics;
     }
 
     @Override
@@ -71,9 +78,11 @@ public class SgwRuntimeWebFilter implements WebFilter, Ordered {
         }
         Optional<CompiledRoute> matched = routeMatcher.match(snapshot, exchange.getRequest());
         if (matched.isEmpty()) {
+            metrics.routeMiss();
             return responseWriter.write(exchange, SgwErrorCode.ROUTE_NOT_FOUND);
         }
         CompiledRoute route = matched.get();
+        metrics.routeHit(route.routeCode(), accessMode(snapshot, route));
         exchange.getAttributes().put(RequestAttributes.ROUTE, route);
         return requestAuthorizer.authorize(exchange, snapshot, route)
                 .flatMap(result -> {
@@ -82,6 +91,18 @@ public class SgwRuntimeWebFilter implements WebFilter, Ordered {
                     }
                     return governanceHandler.handle(result.exchange(), snapshot, route, sourceIp);
                 });
+    }
+
+    /**
+     * 路由绑定的访问模式（用于指标标签；策略缺失时为 null，不影响 fail-closed 判定）
+     */
+    private AccessMode accessMode(CompiledSnapshot snapshot, CompiledRoute route) {
+        String policyCode = route.getDefinition().getAuthPolicyCode();
+        if (policyCode == null) {
+            return null;
+        }
+        AuthPolicy policy = snapshot.getAuthPolicies().get(policyCode);
+        return policy == null ? null : policy.getAccessMode();
     }
 
     @Override

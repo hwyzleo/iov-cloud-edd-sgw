@@ -8,6 +8,7 @@ import net.hwyz.iov.cloud.edd.sgw.common.PageSlice;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.mapper.AuthPolicyMapper;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.po.AuthPolicyPo;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -21,6 +22,7 @@ import java.util.Optional;
  *
  * @author hwyz_leo
  */
+@Slf4j
 @Repository
 public class AuthPolicyRepository {
 
@@ -120,13 +122,35 @@ public class AuthPolicyRepository {
                 .policyCode(po.getPolicyCode())
                 .policyName(po.getPolicyName())
                 .description(po.getDescription())
-                .accessMode(po.getAccessMode() == null ? null : AccessMode.valueOf(po.getAccessMode()))
+                .accessMode(parseAccessMode(po.getAccessMode(), po.getPolicyCode()))
                 .allowedClientTypes(split(po.getAllowedClientTypes()))
                 .requiredScopes(split(po.getRequiredScopes()))
                 .requiredPermissions(split(po.getRequiredPermissions()))
                 .enabled(po.getEnabled())
                 .rowVersion(po.getRowVersion())
                 .build();
+    }
+
+    /**
+     * 解析访问模式（EDD-SGW-DSN-CR-003 D-003-5：MPT 未知枚举不得导致 5xx）。
+     * <p>
+     * 无法识别的取值降级为 null，由校验器（发布期）与鉴权器（运行期 fail-closed）拒绝，绝不默认匿名。
+     *
+     * @param value      存取取值
+     * @param policyCode 策略编码（仅用于告警定位）
+     * @return 访问模式，未知时为 null
+     */
+    private AccessMode parseAccessMode(String value, String policyCode) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        try {
+            return AccessMode.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("认证策略访问模式取值未知，按未绑定策略处理（fail-closed）: policyCode={}, accessMode={}",
+                    policyCode, value);
+            return null;
+        }
     }
 
     static String join(List<String> values) {

@@ -1,25 +1,31 @@
 package net.hwyz.iov.cloud.edd.sgw.security;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import net.hwyz.iov.cloud.edd.sgw.api.enums.AccessMode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
+import net.hwyz.iov.cloud.edd.sgw.config.SgwProperties;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.RouteDefinition;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.SgwConfiguration;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.AuthenticatedIdentity;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledRoute;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledSnapshot;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SgwRouteMetrics;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SourceIpResolver;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.CiamTokenVerifier;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.InternalHmacVerifier;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.RequestAuthorizer;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.SgwHeaders;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
-import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.List;
 
@@ -27,7 +33,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 请求认证与身份头清洗测试（EDD-SGW-DSN-CR-002）。
+ * 请求认证与身份头清洗测试（EDD-SGW-DSN-CR-002 / EDD-SGW-DSN-CR-003）。
+ * <p>
+ * CR-003 收敛：策略缺失/禁用/未知模式 fail-closed；{@code INTERNAL} 判定链；
+ * {@code Idempotency-Key} 透传；拒绝/身份来源写入进程内指标。
  *
  * @author hwyz_leo
  */
@@ -35,8 +44,18 @@ class RequestAuthorizerTest {
 
     private static final String POLICY = "vehicle-user";
 
+    private static final String ANON_POLICY = "anon-ivi-auth";
+
+    private static final String INTERNAL_POLICY = "internal-service";
+
+    private static final String IDEMPOTENCY_VALUE = "idem-0001";
+
     private final AuthenticatedIdentity identity = new AuthenticatedIdentity("user-1", "client-1", "MOBILE",
             "device-1", "session-1", "VIN1", List.of("vehicle.read", "perm:edd:vehicle:read"));
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+    private final SgwRouteMetrics metrics = new SgwRouteMetrics(registry);
 
     @Test
     @DisplayName("匿名路由透传声明型元数据并标记 DECLARED，同时删除伪造的可信身份头")
@@ -48,6 +67,7 @@ class RequestAuthorizerTest {
                 .header("X-Platform", "ios")
                 .header("X-Os-Version", "18.0")
                 .header("X-App-Version", "1.2.3")
+                .header(SgwHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_VALUE)
                 .header("X-User-Id", "forged-user")
                 .header("X-Username", "forged-name")
                 .header("X-User-Key", "forged-key")
@@ -63,7 +83,7 @@ class RequestAuthorizerTest {
                 .build());
 
         RequestAuthorizer.AuthorizationResult result = authorizer(identity)
-                .authorize(exchange, snapshot(null), route(null)).block();
+                .authorize(exchange, snapshot(anonymousPolicy()), route(ANON_POLICY)).block();
 
         assertThat(result).isNotNull();
         assertThat(result.identity()).isNull();
@@ -75,10 +95,16 @@ class RequestAuthorizerTest {
         assertThat(headers.getFirst("X-Os-Version")).isEqualTo("18.0");
         assertThat(headers.getFirst("X-App-Version")).isEqualTo("1.2.3");
         assertThat(headers.getFirst(SgwHeaders.IDENTITY_SOURCE)).isEqualTo(SgwHeaders.IDENTITY_SOURCE_DECLARED);
+        assertThat(headers.getFirst(SgwHeaders.IDEMPOTENCY_KEY))
+                .as("幂等键不得参与可信头清洗").isEqualTo(IDEMPOTENCY_VALUE);
         for (String removed : List.of("X-User-Id", "X-Username", "X-User-Key", "X-Session-Id", "X-Vin", "X-Scope",
                 "from-source", "X-Permission", "X-Role", "X-Internal-Client", "X-Internal-Signature")) {
             assertThat(headers.getFirst(removed)).as("匿名路由不应转发 %s", removed).isNull();
         }
+        assertThat(registry.find(SgwRouteMetrics.POLICY_ANONYMOUS)
+                .tag("policy_code", ANON_POLICY).counter().count()).isEqualTo(1.0);
+        assertThat(registry.find(SgwRouteMetrics.IDENTITY_SOURCE)
+                .tag("source", SgwHeaders.IDENTITY_SOURCE_DECLARED).counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -90,7 +116,7 @@ class RequestAuthorizerTest {
                 .build());
 
         RequestAuthorizer.AuthorizationResult result = authorizer(identity)
-                .authorize(exchange, snapshot(null), route(null)).block();
+                .authorize(exchange, snapshot(anonymousPolicy()), route(ANON_POLICY)).block();
 
         assertThat(result).isNotNull();
         HttpHeaders headers = result.exchange().getRequest().getHeaders();
@@ -99,10 +125,57 @@ class RequestAuthorizerTest {
     }
 
     @Test
-    @DisplayName("认证路由以令牌声明覆盖同名声明头并标记 CIAM")
+    @DisplayName("路由未绑定认证授权策略时 fail-closed 返回 403")
+    void routeWithoutPolicyIsRejected() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo-anon").build());
+
+        assertThatThrownBy(() -> authorizer(identity)
+                .authorize(exchange, snapshot(anonymousPolicy()), route(null)).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+        assertThat(registry.find(SgwRouteMetrics.AUTH_REJECT)
+                .tag("reject_reason", "NO_POLICY").tag("route_code", "echo").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("引用的策略不存在时 fail-closed 返回 403")
+    void missingPolicyReferenceIsRejected() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo").build());
+
+        assertThatThrownBy(() -> authorizer(identity)
+                .authorize(exchange, snapshot(anonymousPolicy()), route("absent-policy")).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+    }
+
+    @Test
+    @DisplayName("策略被禁用时 fail-closed 返回 403（不再回落匿名）")
+    void disabledPolicyIsRejected() {
+        AuthPolicy disabled = AuthPolicy.builder()
+                .policyCode(ANON_POLICY)
+                .accessMode(AccessMode.ANONYMOUS)
+                .enabled(false)
+                .build()
+                .normalized();
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo-anon").build());
+
+        assertThatThrownBy(() -> authorizer(identity)
+                .authorize(exchange, snapshot(disabled), route(ANON_POLICY)).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+        assertThat(registry.find(SgwRouteMetrics.AUTH_REJECT)
+                .tag("reject_reason", "POLICY_DISABLED").tag("route_code", "echo").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("认证路由以令牌声明覆盖同名声明头并标记 CIAM，且保留幂等键")
     void protectedRouteOverridesDeclaredMetadata() {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .header(SgwHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_VALUE)
                 .header("X-Client-Id", "client-1")
                 .header("X-Client-Type", "MOBILE")
                 .header("X-Device-Id", "device-forged")
@@ -126,6 +199,42 @@ class RequestAuthorizerTest {
         assertThat(headers.getFirst("X-Vin")).isEqualTo("VIN1");
         assertThat(headers.getFirst("X-Scope")).contains("vehicle.read").doesNotContain("forged");
         assertThat(headers.getFirst(SgwHeaders.IDENTITY_SOURCE)).isEqualTo(SgwHeaders.IDENTITY_SOURCE_CIAM);
+        assertThat(headers.getFirst(SgwHeaders.IDEMPOTENCY_KEY))
+                .as("幂等键不得参与可信头清洗").isEqualTo(IDEMPOTENCY_VALUE);
+    }
+
+    @Test
+    @DisplayName("车机令牌访问车辆激活域仅由令牌 vehicle_id 注入 X-Vin")
+    void iviRouteInjectsVinFromToken() {
+        AuthenticatedIdentity ivi = new AuthenticatedIdentity("user-2", "ivi-capp", "IVI",
+                "device-ivi", "session-ivi", "LZZIVI0000000001", List.of());
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/vehicle/activation/v1/session")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .header("X-Vin", "FORGED-VIN")
+                .build());
+
+        RequestAuthorizer.AuthorizationResult result = authorizer(ivi)
+                .authorize(exchange, snapshot(vehiclePolicy()), route(POLICY)).block();
+
+        assertThat(result).isNotNull();
+        assertThat(result.exchange().getRequest().getHeaders().getFirst("X-Vin"))
+                .isEqualTo("LZZIVI0000000001");
+    }
+
+    @Test
+    @DisplayName("MOBILE 令牌访问仅允许 IVI 的车辆激活域返回 403（无 vehicle_id 不放行）")
+    void mobileTokenRejectedOnVehicleRoute() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .build());
+
+        assertThatThrownBy(() -> authorizer(identity)
+                .authorize(exchange, snapshot(vehiclePolicy()), route(POLICY)).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+        assertThat(registry.find(SgwRouteMetrics.AUTH_REJECT)
+                .tag("reject_reason", "CLIENT_TYPE").tag("route_code", "echo").counter().count()).isEqualTo(1.0);
     }
 
     @Test
@@ -162,7 +271,7 @@ class RequestAuthorizerTest {
     void protectedRouteRejectsClientTypeMismatch() {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/echo")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer token")
-                .header("X-Client-Type", "IDCM")
+                .header("X-Client-Type", "IVI")
                 .build());
 
         assertThatThrownBy(() -> authorizer(identity)
@@ -172,13 +281,87 @@ class RequestAuthorizerTest {
                 .isEqualTo(SgwErrorCode.UNAUTHORIZED);
     }
 
-    private RequestAuthorizer authorizer(AuthenticatedIdentity verified) {
-        return new RequestAuthorizer(new StubTokenVerifier(verified));
+    @Test
+    @DisplayName("内部服务域来源不在 internal-cidrs 内返回 403")
+    void internalRouteRejectsUntrustedSource() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
+                .remoteAddress(new InetSocketAddress("192.0.2.9", 45678))
+                .header("X-Internal-Client", "iov-tsp")
+                .build());
+
+        assertThatThrownBy(() -> authorizer(identity)
+                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+        assertThat(registry.find(SgwRouteMetrics.AUTH_REJECT)
+                .tag("reject_reason", "INTERNAL_AUTH").tag("route_code", "echo").counter().count()).isEqualTo(1.0);
     }
 
-    private CompiledSnapshot snapshot(AuthPolicy policy) {
+    @Test
+    @DisplayName("内部服务域签名校验失败返回 403")
+    void internalRouteRejectsInvalidSignature() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
+                .remoteAddress(new InetSocketAddress("10.1.2.3", 45678))
+                .header("X-Internal-Client", "iov-tsp")
+                .header("X-Internal-Signature", "invalid")
+                .build());
+        RequestAuthorizer authorizer = new RequestAuthorizer(new StubTokenVerifier(identity),
+                new StubInternalVerifier(null), properties(), metrics, new SourceIpResolver(properties()));
+
+        assertThatThrownBy(() -> authorizer
+                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block())
+                .isInstanceOf(SgwException.class)
+                .extracting(error -> ((SgwException) error).errorCode())
+                .isEqualTo(SgwErrorCode.FORBIDDEN);
+    }
+
+    @Test
+    @DisplayName("内部服务域签名通过后不注入身份头、不写身份来源、保留幂等键")
+    void internalRouteStripsIdentityHeaders() {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
+                .remoteAddress(new InetSocketAddress("10.1.2.3", 45678))
+                .header(SgwHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_VALUE)
+                .header("X-Internal-Client", "iov-tsp")
+                .header("X-Internal-Timestamp", "1700000000000")
+                .header("X-Internal-Nonce", "nonce-1")
+                .header("X-Internal-Signature", "signature")
+                .header("X-User-Id", "forged-user")
+                .header("X-Vin", "FORGED-VIN")
+                .header("X-Identity-Source", SgwHeaders.IDENTITY_SOURCE_CIAM)
+                .build());
+        RequestAuthorizer authorizer = new RequestAuthorizer(new StubTokenVerifier(identity),
+                new StubInternalVerifier("iov-tsp"), properties(), metrics, new SourceIpResolver(properties()));
+
+        RequestAuthorizer.AuthorizationResult result = authorizer
+                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block();
+
+        assertThat(result).isNotNull();
+        assertThat(result.identity()).isNull();
+        HttpHeaders headers = result.exchange().getRequest().getHeaders();
+        for (String removed : List.of("X-User-Id", "X-Vin", "X-Identity-Source", "X-Internal-Client",
+                "X-Internal-Timestamp", "X-Internal-Nonce", "X-Internal-Signature")) {
+            assertThat(headers.getFirst(removed)).as("内部服务域不应转发 %s", removed).isNull();
+        }
+        assertThat(headers.getFirst(SgwHeaders.IDEMPOTENCY_KEY)).isEqualTo(IDEMPOTENCY_VALUE);
+        assertThat(registry.find(SgwRouteMetrics.IDENTITY_SOURCE)
+                .tag("source", SgwHeaders.IDENTITY_SOURCE_CIAM).counter()).isNull();
+    }
+
+    private RequestAuthorizer authorizer(AuthenticatedIdentity verified) {
+        return new RequestAuthorizer(new StubTokenVerifier(verified), new StubInternalVerifier("iov-tsp"),
+                properties(), metrics, new SourceIpResolver(properties()));
+    }
+
+    private SgwProperties properties() {
+        SgwProperties properties = new SgwProperties();
+        properties.getRuntime().setInternalCidrs(List.of("10.0.0.0/8"));
+        return properties;
+    }
+
+    private CompiledSnapshot snapshot(AuthPolicy... policies) {
         return new CompiledSnapshot(1L, "checksum", SgwConfiguration.builder()
-                .authPolicies(policy == null ? List.of() : List.of(policy))
+                .authPolicies(List.of(policies))
                 .build().normalized(), List.of(), Instant.now());
     }
 
@@ -192,12 +375,42 @@ class RequestAuthorizerTest {
                 .build(), List.of(), List.of(), List.of(), null);
     }
 
+    private AuthPolicy anonymousPolicy() {
+        return AuthPolicy.builder()
+                .policyCode(ANON_POLICY)
+                .accessMode(AccessMode.ANONYMOUS)
+                .enabled(true)
+                .build()
+                .normalized();
+    }
+
     private AuthPolicy protectedPolicy() {
         return AuthPolicy.builder()
                 .policyCode(POLICY)
                 .accessMode(AccessMode.AUTHENTICATED)
+                .allowedClientTypes(List.of("MOBILE"))
                 .enabled(true)
-                .build();
+                .build()
+                .normalized();
+    }
+
+    private AuthPolicy vehiclePolicy() {
+        return AuthPolicy.builder()
+                .policyCode(POLICY)
+                .accessMode(AccessMode.AUTHENTICATED)
+                .allowedClientTypes(List.of("IVI"))
+                .enabled(true)
+                .build()
+                .normalized();
+    }
+
+    private AuthPolicy internalPolicy() {
+        return AuthPolicy.builder()
+                .policyCode(INTERNAL_POLICY)
+                .accessMode(AccessMode.INTERNAL)
+                .enabled(true)
+                .build()
+                .normalized();
     }
 
     private static final class StubTokenVerifier extends CiamTokenVerifier {
@@ -212,6 +425,29 @@ class RequestAuthorizerTest {
         @Override
         public Mono<AuthenticatedIdentity> verify(String token) {
             return Mono.just(verified);
+        }
+
+    }
+
+    private static final class StubInternalVerifier extends InternalHmacVerifier {
+
+        private final String actor;
+
+        private StubInternalVerifier(String actor) {
+            super(new SgwProperties(), null);
+            this.actor = actor;
+        }
+
+        @Override
+        public Mono<String> verify(ServerHttpRequest request, String bodyHash) {
+            return verify(request, bodyHash, NonceScope.ADMIN);
+        }
+
+        @Override
+        public Mono<String> verify(ServerHttpRequest request, String bodyHash, NonceScope scope) {
+            return actor == null
+                    ? Mono.error(new SgwException(SgwErrorCode.UNAUTHORIZED, "内部请求签名无效"))
+                    : Mono.just(actor);
         }
 
     }

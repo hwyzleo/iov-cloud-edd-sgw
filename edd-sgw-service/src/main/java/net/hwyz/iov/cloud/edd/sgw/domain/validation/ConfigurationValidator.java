@@ -85,6 +85,7 @@ public class ConfigurationValidator {
 
         checkAmbiguousRoutes(configuration.getRoutes(), result);
         checkCanaryKeyAvailability(configuration.getRoutes(), authPolicies, canaryPolicies, result);
+        checkInternalDomain(configuration.getRoutes(), authPolicies, result);
         return result;
     }
 
@@ -153,18 +154,51 @@ public class ConfigurationValidator {
             if (canaryPolicy == null || !canaryPolicy.effective()) {
                 continue;
             }
-            AccessMode mode = AccessMode.ANONYMOUS;
-            if (route.getAuthPolicyCode() != null) {
-                AuthPolicy authPolicy = authPolicies.get(route.getAuthPolicyCode());
-                if (authPolicy != null && authPolicy.getAccessMode() != null) {
-                    mode = authPolicy.getAccessMode();
-                }
+            // EDD-SGW-DSN-CR-003 RD-003-5：删除 AccessMode.ANONYMOUS 缺省推导，策略不可用即校验失败（fail-closed）
+            AuthPolicy authPolicy = route.getAuthPolicyCode() == null
+                    ? null : authPolicies.get(route.getAuthPolicyCode());
+            if (authPolicy == null || !authPolicy.effective() || authPolicy.getAccessMode() == null) {
+                result.add("routes[" + route.getRouteCode() + "].authPolicyCode",
+                        "路由未绑定有效认证授权策略");
+                continue;
             }
+            AccessMode mode = authPolicy.getAccessMode();
             List<String> unavailable = policyValidator.unavailableStableKeys(canaryPolicy, mode);
             if (!unavailable.isEmpty()) {
                 result.add("routes[" + route.getRouteCode() + "].canaryPolicyCode",
                         "灰度稳定键 " + unavailable.get(0) + " 在 " + mode + " 访问模式下不可用");
             }
+        }
+    }
+
+    /**
+     * 内部服务域校验（EDD-SGW-DSN-CR-003 D-003-1 / R-7 / R-9）。
+     * <p>
+     * ① {@code INTERNAL} 路由的路径必须落在已登记前缀内；
+     * ② 存在 {@code INTERNAL} 路由时 {@code sgw.runtime.internal-cidrs} 不得为空；
+     * ③ 非空时每项必须可解析为合法 CIDR/IP。
+     *
+     * @param routes       路由
+     * @param authPolicies 策略索引
+     * @param result       结果
+     */
+    private void checkInternalDomain(List<RouteDefinition> routes, Map<String, AuthPolicy> authPolicies,
+                                     ValidationResult result) {
+        List<String> cidrs = InternalDomainRules.effectiveCidrs(properties.getRuntime().getInternalCidrs());
+        InternalDomainRules.cidrErrors(cidrs).forEach(field -> result.add(field, "内部来源网段必须是合法 CIDR 或 IP"));
+        for (RouteDefinition route : routes) {
+            if (!route.effective() || !InternalDomainRules.isInternal(authPolicies.get(route.getAuthPolicyCode()))) {
+                continue;
+            }
+            for (String path : InternalDomainRules.unregisteredPaths(route)) {
+                result.add("routes[" + route.getRouteCode() + "].match.paths",
+                        "内部服务域路由路径未在已登记前缀内: " + path);
+            }
+        }
+        List<String> internalRoutes = InternalDomainRules.internalRouteCodes(routes, authPolicies);
+        if (!internalRoutes.isEmpty() && cidrs.isEmpty()) {
+            result.add("sgw.runtime.internal-cidrs",
+                    "存在 INTERNAL 路由但未配置内部来源网段（路由: " + internalRoutes + "）");
         }
     }
 

@@ -2,9 +2,16 @@ package net.hwyz.iov.cloud.edd.sgw.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.jsonwebtoken.Jwts;
+import net.hwyz.iov.cloud.edd.sgw.api.enums.AccessMode;
 import net.hwyz.iov.cloud.edd.sgw.common.Json;
+import net.hwyz.iov.cloud.edd.sgw.domain.catalog.SgwAppPathCatalog;
+import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledRoute;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledSnapshot;
+import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.RouteMatcher;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SnapshotManager;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.InternalHmacVerifier;
+import net.hwyz.iov.cloud.edd.sgw.support.SeedSql;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
@@ -23,12 +30,16 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.EntityExchangeResult;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPublicKey;
@@ -36,9 +47,12 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -66,6 +80,8 @@ class SgwFoundationIT {
     private static final String ADMIN_PREFIX = "/api/service/sgw/v1";
 
     private static final AtomicInteger COUNTER = new AtomicInteger();
+
+    private final Set<String> createdPolicies = new HashSet<>();
 
     private static DisposableServer upstream;
 
@@ -108,6 +124,9 @@ class SgwFoundationIT {
             registry.add("spring.cloud.nacos.config.enabled", () -> "false");
             registry.add("spring.cloud.nacos.discovery.enabled", () -> "false");
             registry.add("spring.cloud.service-registry.auto-registration.enabled", () -> "false");
+            // 本机可能已运行网关实例/本地 Nacos 远程配置（含 server.port），
+            // 此处强制 RANDOM_PORT 语义，避免集成测试与常驻进程抢端口而失败。
+            registry.add("server.port", () -> "0");
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
@@ -122,6 +141,7 @@ class SgwFoundationIT {
         }
         jdbcTemplate.execute("UPDATE sgw_config_workspace SET draft_revision = 0, target_version_no = NULL, "
                 + "row_version = 1 WHERE id = 1");
+        createdPolicies.clear();
     }
 
     @Test
@@ -195,7 +215,8 @@ class SgwFoundationIT {
                 "enabled", true,
                 "match", Map.of("paths", List.of("/echo-anon"), "methods", List.of("GET"),
                         "clientTypes", List.of("MOBILE")),
-                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo-anon")));
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo-anon"),
+                "authPolicyCode", anonymousPolicy()));
         publishAndWait();
 
         EntityExchangeResult<String> response = client.get().uri("/echo-anon")
@@ -242,7 +263,7 @@ class SgwFoundationIT {
                 .exchange(), 403, "SGW-403001");
         assertError(client.get().uri("/echo-strict")
                 .header("Authorization", "Bearer " + token("MOBILE", "VIN1", "admin.write perm:edd:admin:write"))
-                .header("X-Client-Type", "IDCM")
+                .header("X-Client-Type", "IVI")
                 .exchange(), 401, "SGW-401001");
     }
 
@@ -286,6 +307,7 @@ class SgwFoundationIT {
                 "enabled", true,
                 "match", Map.of("paths", List.of("/slow"), "methods", List.of("GET")),
                 "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/slow"),
+                "authPolicyCode", anonymousPolicy(),
                 "trafficPolicyCode", trafficCode));
         publishAndWait();
         assertError(client.get().uri("/slow").exchange(), 504, "SGW-504001");
@@ -341,7 +363,8 @@ class SgwFoundationIT {
                 "priority", 100,
                 "enabled", true,
                 "match", Map.of("paths", List.of("/echo"), "methods", List.of("GET")),
-                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo")));
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", anonymousPolicy()));
         publishAndWait();
         assertThat(client.get().uri("/echo").exchange().expectBody(String.class)
                 .returnResult().getStatus().value()).isEqualTo(200);
@@ -354,6 +377,7 @@ class SgwFoundationIT {
                 "enabled", true,
                 "match", Map.of("paths", List.of("/echo-anon"), "methods", List.of("GET")),
                 "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo-anon"),
+                "authPolicyCode", anonymousPolicy(),
                 "rowVersion", route.get("rowVersion").asInt()));
         assertThat(client.get().uri("/echo").exchange().expectBody(String.class)
                 .returnResult().getStatus().value()).isEqualTo(200);
@@ -412,6 +436,7 @@ class SgwFoundationIT {
                 "enabled", true,
                 "match", Map.of("paths", List.of("/fail"), "methods", List.of("GET")),
                 "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/fail"),
+                "authPolicyCode", anonymousPolicy(),
                 "trafficPolicyCode", trafficCode));
         publishAndWait();
         for (int i = 0; i < 2; i++) {
@@ -431,7 +456,8 @@ class SgwFoundationIT {
                 "priority", 100,
                 "enabled", true,
                 "match", Map.of("paths", List.of("/echo"), "methods", List.of("GET")),
-                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo")));
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", anonymousPolicy()));
         JsonNode publication = publishAndWait();
         assertError(signed(HttpMethod.POST, ADMIN_PREFIX + "/publications",
                 Map.of("publicationId", publication.get("publicationId").asText())),
@@ -470,7 +496,8 @@ class SgwFoundationIT {
                 "priority", 100,
                 "enabled", true,
                 "match", Map.of("paths", List.of("/echo"), "methods", List.of("GET")),
-                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo")));
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", anonymousPolicy()));
         JsonNode export = adminJson(HttpMethod.GET, ADMIN_PREFIX + "/exports/config", null);
         String content = export.get("content").asText();
         assertThat(content).contains("export-route");
@@ -478,12 +505,152 @@ class SgwFoundationIT {
         assertThat(content.toLowerCase()).doesNotContain("password");
     }
 
+    @Test
+    @Order(0)
+    @DisplayName("V3+V4 种子迁移幂等：策略 7 行 / 路由 20 行，重复执行不新增、不覆盖本地修改")
+    void seedMigrationIsIdempotent() {
+        reseed();
+        assertThat(countRows("sgw_auth_policy")).isEqualTo(7);
+        assertThat(countRows("sgw_route")).isEqualTo(20);
+
+        reseed();
+        assertThat(countRows("sgw_auth_policy")).isEqualTo(7);
+        assertThat(countRows("sgw_route")).isEqualTo(20);
+
+        jdbcTemplate.update("UPDATE sgw_auth_policy SET policy_name = ? WHERE policy_code = ?",
+                "本地改名", "sgw-mobile-user");
+        reseed();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT policy_name FROM sgw_auth_policy WHERE policy_code = ?", String.class, "sgw-mobile-user"))
+                .isEqualTo("本地改名");
+    }
+
+    @Test
+    @Order(20)
+    @DisplayName("App 在用前缀经真实发布快照可达：选路成功且鉴权拒绝为 401 而非 404（TC-003-18）")
+    void appPrefixesReachableThroughPublishedSnapshot() {
+        reseed();
+        publishAndWait();
+
+        CompiledSnapshot snapshot = snapshotManager.current();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getRoutes()).hasSize(20);
+        RouteMatcher matcher = new RouteMatcher();
+        for (SgwAppPathCatalog.AppPrefix prefix : SgwAppPathCatalog.APP_IN_USE_PREFIXES) {
+            String probe = probePath(prefix.prefix());
+            Optional<CompiledRoute> matched = matcher.match(snapshot, MockServerHttpRequest.get(probe).build());
+            assertThat(matched).as("前缀 %s 必须命中 %s", prefix.prefix(), prefix.routeCode()).isPresent();
+            assertThat(matched.get().routeCode()).isEqualTo(prefix.routeCode());
+            AuthPolicy policy = snapshot.getAuthPolicies()
+                    .get(matched.get().getDefinition().getAuthPolicyCode());
+            assertThat(policy).isNotNull();
+            assertThat(policy.getAccessMode()).isEqualTo(prefix.accessMode());
+            if (prefix.accessMode() == AccessMode.AUTHENTICATED) {
+                assertError(client.get().uri(probe).exchange(), 401, "SGW-401001");
+            }
+        }
+
+        // BLK-5：车机认证入口任意 X-Client-Id（含缺失）均可选路，不再是 404
+        int status = client.get().uri("/api/ivi/auth/v1/token")
+                .header("X-Client-Id", "iphone-capp")
+                .exchange().expectBody(String.class).returnResult().getStatus().value();
+        assertThat(status).as("登录入口应选路成功（上游无实例时为 503，不得为 404）").isNotEqualTo(404);
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("未绑定策略的路由在保存与发布两端均被拒绝（SGW-400001，版本号不增加）")
+    void routeWithoutPolicyCannotBePublished() {
+        String routeCode = "no-policy-" + COUNTER.incrementAndGet();
+        Map<String, Object> body = Map.of(
+                "routeCode", routeCode,
+                "routeName", "缺策略路由",
+                "priority", 500,
+                "enabled", true,
+                "match", Map.of("paths", List.of("/no-policy"), "methods", List.of("GET")),
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"));
+        // ① 保存入口收紧：缺 authPolicyCode 直接 400
+        assertError(signed(HttpMethod.POST, ADMIN_PREFIX + "/routes", body), 400, "SGW-400001");
+
+        // ② 历史/直写数据（绕过保存校验）在发布入口被拦截，且不产生新版本
+        jdbcTemplate.update("INSERT INTO sgw_route (route_code, route_name, priority, enabled, match_json, "
+                        + "target_type, target_value, row_version, row_valid, create_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                routeCode, "缺策略路由", 500, true,
+                "{\"paths\":[\"/no-policy\"],\"methods\":[\"GET\"],\"hosts\":[],\"headers\":[],"
+                        + "\"queryParams\":[],\"clientTypes\":[]}",
+                "HTTP", "http://127.0.0.1:" + upstreamPort + "/echo", 1, 1, "it");
+        long draftRevision = workspace().get("draftRevision").asLong();
+        assertError(signed(HttpMethod.POST, ADMIN_PREFIX + "/config-versions",
+                Map.of("draftRevision", draftRevision)), 400, "SGW-400001");
+        Integer versions = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sgw_config_version", Integer.class);
+        assertThat(versions).isZero();
+    }
+
+    @Test
+    @Order(22)
+    @DisplayName("未知访问模式返回 400 而非 500（枚举版本错配兜底，D-003-5）")
+    void unknownAccessModeIsRejectedAsValidation() {
+        assertError(signed(HttpMethod.POST, ADMIN_PREFIX + "/policies/auth", Map.of(
+                "policyCode", "future-mode",
+                "policyName", "未来模式",
+                "accessMode", "FUTURE_MODE",
+                "enabled", true)), 400, "SGW-400001");
+    }
+
+    /**
+     * 测试用匿名策略（EDD-SGW-DSN-CR-003 起路由必须绑定策略）
+     */
+    private String anonymousPolicy() {
+        String code = "it-anon";
+        if (createdPolicies.add(code)) {
+            adminJson(HttpMethod.POST, ADMIN_PREFIX + "/policies/auth", Map.of(
+                    "policyCode", code,
+                    "policyName", "匿名回显",
+                    "accessMode", "ANONYMOUS",
+                    "enabled", true));
+        }
+        return code;
+    }
+
+    /**
+     * 重新执行 V3 基线 + V4 终审修复种子迁移（已存在行不覆盖，重复执行幂等）
+     */
+    private void reseed() {
+        for (String script : List.of(migrationScript(SeedSql.ROUTE_FILE), migrationScript(SeedSql.V4_ROUTE_FILE))) {
+            for (String statement : script.split(";")) {
+                if (statement.contains("INSERT INTO")) {
+                    jdbcTemplate.execute(statement);
+                }
+            }
+        }
+    }
+
+    private String migrationScript(String resource) {
+        try (InputStream stream = SgwFoundationIT.class.getClassLoader().getResourceAsStream(resource)) {
+            if (stream == null) {
+                throw new IllegalStateException("未找到迁移脚本: " + resource);
+            }
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("读取迁移脚本失败: " + resource, e);
+        }
+    }
+
+    private int countRows(String table) {
+        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    private String probePath(String prefix) {
+        return prefix.endsWith("/**") ? prefix.substring(0, prefix.length() - 3) + "/probe" : prefix;
+    }
+
     private String createAuthPolicy(String code, List<String> scopes, List<String> permissions) {
         adminJson(HttpMethod.POST, ADMIN_PREFIX + "/policies/auth", Map.of(
                 "policyCode", code,
                 "policyName", "策略-" + code,
                 "accessMode", "AUTHENTICATED",
-                "allowedClientTypes", List.of("MOBILE", "IDCM"),
+                "allowedClientTypes", List.of("MOBILE", "IVI"),
                 "requiredScopes", scopes,
                 "requiredPermissions", permissions,
                 "enabled", true));

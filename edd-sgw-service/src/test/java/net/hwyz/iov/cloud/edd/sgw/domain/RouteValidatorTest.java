@@ -99,6 +99,24 @@ class RouteValidatorTest {
     }
 
     @Test
+    @DisplayName("认证授权策略必填（EDD-SGW-DSN-CR-003 RD-003-5）")
+    void authPolicyCodeRequired() {
+        RouteDefinition route = route(RouteTargetType.SERVICE, "edd-vmd-service", null);
+        route.setAuthPolicyCode(" ");
+        ValidationResult result = validator.validate(route, Set.of());
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errors()).extracting(net.hwyz.iov.cloud.edd.sgw.domain.validation.ValidationError::field)
+                .contains("authPolicyCode");
+
+        RouteDefinition missing = route(RouteTargetType.SERVICE, "edd-vmd-service", null);
+        missing.setAuthPolicyCode(null);
+        ValidationResult missingResult = validator.validate(missing, Set.of());
+        assertThat(missingResult.errors())
+                .extracting(net.hwyz.iov.cloud.edd.sgw.domain.validation.ValidationError::field)
+                .contains("authPolicyCode");
+    }
+
+    @Test
     @DisplayName("重写路径必须为正则且以斜杠开头")
     void rewritePathValidation() {
         RouteDefinition route = route(RouteTargetType.SERVICE, "edd-vmd-service", null);
@@ -120,6 +138,7 @@ class RouteValidatorTest {
                         .methods(List.of("GET"))
                         .build())
                 .target(RouteTarget.builder().type(type).serviceId(serviceId).uri(uri).build())
+                .authPolicyCode("vehicle-user")
                 .build();
     }
 

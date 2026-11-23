@@ -65,6 +65,10 @@ public class RouteValidator {
         validateMatch(route.getMatch(), result);
         validateTarget("target", route.getTarget(), directHosts, result);
         validateTransform(route.getTransform(), result);
+        // EDD-SGW-DSN-CR-003 RD-003-5：认证授权策略必填，消除「缺策略即匿名」的隐式缺省
+        if (isBlank(route.getAuthPolicyCode())) {
+            result.add("authPolicyCode", "认证授权策略不能为空");
+        }
         return result;
     }
 

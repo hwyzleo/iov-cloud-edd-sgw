@@ -71,6 +71,7 @@ class ConfigurationValidatorTest {
                 .policyCode("anonymous")
                 .policyName("匿名")
                 .accessMode(AccessMode.ANONYMOUS)
+                .enabled(true)
                 .build();
         route.setAuthPolicyCode("anonymous");
         CanaryPolicy canaryPolicy = CanaryPolicy.builder()
@@ -97,6 +98,110 @@ class ConfigurationValidatorTest {
         assertThat(result.message()).contains("灰度稳定键");
     }
 
+    @Test
+    @DisplayName("路由未绑定认证授权策略时不能使用灰度策略（去匿名缺省）")
+    void canaryRequiresEffectivePolicy() {
+        RouteDefinition route = route("route-a", 100);
+        route.setCanaryPolicyCode("canary");
+        CanaryPolicy canaryPolicy = canaryPolicy();
+        SgwConfiguration configuration = SgwConfiguration.builder()
+                .routes(List.of(route))
+                .canaryPolicies(List.of(canaryPolicy))
+                .build();
+        ValidationResult result = validator.validate(configuration);
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errors()).extracting(ValidationError::field)
+                .contains("routes[route-a].authPolicyCode");
+        assertThat(result.message()).contains("路由未绑定有效认证授权策略");
+    }
+
+    @Test
+    @DisplayName("INTERNAL 路由前缀必须在已登记清单内")
+    void internalRoutePrefixWhitelist() {
+        properties.getRuntime().setInternalCidrs(List.of("10.0.0.0/8"));
+        RouteDefinition route = route("/api/service/activation/v1/**");
+        route.setAuthPolicyCode("internal");
+        SgwConfiguration configuration = SgwConfiguration.builder()
+                .routes(List.of(route))
+                .authPolicies(List.of(internalPolicy()))
+                .build();
+        assertThat(validator.validate(configuration).valid()).isTrue();
+
+        RouteDefinition rogue = route("/api/service/unknown/v1/**");
+        rogue.setAuthPolicyCode("internal");
+        SgwConfiguration rogueConfiguration = SgwConfiguration.builder()
+                .routes(List.of(rogue))
+                .authPolicies(List.of(internalPolicy()))
+                .build();
+        ValidationResult result = validator.validate(rogueConfiguration);
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errors()).extracting(ValidationError::field)
+                .contains("routes[route-a].match.paths");
+    }
+
+    @Test
+    @DisplayName("存在 INTERNAL 路由但未配置 internal-cidrs 时拒绝发布")
+    void internalRequiresSourceCidrs() {
+        RouteDefinition route = route("/api/service/activation/v1/**");
+        route.setAuthPolicyCode("internal");
+        SgwConfiguration configuration = SgwConfiguration.builder()
+                .routes(List.of(route))
+                .authPolicies(List.of(internalPolicy()))
+                .build();
+        ValidationResult result = validator.validate(configuration);
+        assertThat(result.valid()).isFalse();
+        assertThat(result.errors()).extracting(ValidationError::field).contains("sgw.runtime.internal-cidrs");
+    }
+
+    @Test
+    @DisplayName("internal-cidrs 中的非法条目在发布期即被拒绝")
+    void internalCidrsMustBeParsable() {
+        properties.getRuntime().setInternalCidrs(List.of("10.0.0.0/33", "not-an-ip"));
+        RouteDefinition route = route("/api/service/activation/v1/**");
+        route.setAuthPolicyCode("internal");
+        SgwConfiguration configuration = SgwConfiguration.builder()
+                .routes(List.of(route))
+                .authPolicies(List.of(internalPolicy()))
+                .build();
+        ValidationResult result = validator.validate(configuration);
+        assertThat(result.errors()).extracting(ValidationError::field)
+                .contains("sgw.runtime.internal-cidrs[0]", "sgw.runtime.internal-cidrs[1]");
+    }
+
+    private RouteDefinition route(String path) {
+        RouteDefinition route = route("route-a", 100);
+        route.setMatch(RouteMatch.builder().paths(List.of(path)).methods(List.of("GET")).build());
+        return route;
+    }
+
+    private AuthPolicy internalPolicy() {
+        return AuthPolicy.builder()
+                .policyCode("internal")
+                .policyName("内部服务域")
+                .accessMode(AccessMode.INTERNAL)
+                .enabled(true)
+                .build()
+                .normalized();
+    }
+
+    private CanaryPolicy canaryPolicy() {
+        return CanaryPolicy.builder()
+                .policyCode("canary")
+                .policyName("灰度")
+                .stableKey(CanaryStableKey.SOURCE_IP)
+                .enabled(true)
+                .rules(List.of(CanaryRule.builder()
+                        .priority(1)
+                        .conditions(CanaryConditions.builder().clientTypes(List.of("MOBILE")).build())
+                        .targets(List.of(CanaryTarget.builder()
+                                .type(RouteTargetType.SERVICE)
+                                .serviceId("edd-vmd")
+                                .weight(100)
+                                .build()))
+                        .build()))
+                .build();
+    }
+
     private RouteDefinition route(String code, int priority) {
         return RouteDefinition.builder()
                 .routeCode(code)
@@ -109,6 +214,7 @@ class ConfigurationValidatorTest {
                         .build())
                 .target(RouteTarget.builder().type(RouteTargetType.SERVICE)
                         .serviceId("edd-vmd-service").build())
+                .authPolicyCode("anonymous")
                 .build();
     }
 

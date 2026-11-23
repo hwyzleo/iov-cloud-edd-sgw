@@ -48,6 +48,26 @@ public class SgwProperties {
         /** 可信代理网段 */
         private List<String> trustedProxyCidrs = new ArrayList<>();
 
+        /**
+         * 内部服务域来源网段（EDD-SGW-DSN-CR-003 R-7）。
+         * <p>
+         * 无缺省值：存在 {@code accessMode=INTERNAL} 且被有效路由引用时必须非空，
+         * 否则启动 fail-fast；{@code AccessMode.INTERNAL} 路由的判定链要求来源 IP 命中本清单。
+         * <p>
+         * 空白条目（如 {@code SGW_INTERNAL_CIDRS} 未设置时展开出的空串、或 {@code a,,b} 中的空段）
+         * 在解析前统一过滤，不视为「已配置」。
+         */
+        private List<String> internalCidrs = new ArrayList<>();
+
+        /**
+         * 内部服务域严格模式（EDD-SGW-DSN-CR-003 R-7 终审 R-1），默认 {@code true}。
+         * <p>
+         * {@code true}：存在 {@code INTERNAL} 路由而 {@code internal-cidrs} 生效条目为空时启动 fail-fast；
+         * {@code false}：降级为 WARN 并放行启动（仅供明确知情的迁移期环境使用，运行期仍为失败关闭：
+         * 空清单下任何来源 IP 都不命中 → {@code SGW-403001}）。
+         */
+        private boolean internalDomainStrict = true;
+
         /** 服务发现中的网关服务名 */
         private String discoveryServiceName = "edd-sgw";
 
@@ -140,6 +160,15 @@ public class SgwProperties {
 
         /** nonce 防重放保留时长（秒） */
         private long nonceTtlSeconds = 120;
+
+        /** 管理面 nonce 键前缀（EDD-SGW-DSN-CR-003 R-8，保持既有键空间不变） */
+        private String nonceKeyPrefixAdmin = "sgw:admin:nonce:";
+
+        /** 业务面（内部服务域）nonce 键前缀（EDD-SGW-DSN-CR-003 R-8，与管理面隔离，防跨面重放） */
+        private String nonceKeyPrefixService = "sgw:svc:nonce:";
+
+        /** 内部服务域请求体缓存上限（字节），超限按签名失败处理 */
+        private int maxBodyBytes = 1024 * 1024;
 
         private String clientHeader = "X-Internal-Client";
 

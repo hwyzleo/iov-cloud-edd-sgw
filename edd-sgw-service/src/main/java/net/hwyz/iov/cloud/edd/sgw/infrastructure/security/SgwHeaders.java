@@ -24,6 +24,14 @@ public final class SgwHeaders {
      */
     public static final String IDENTITY_SOURCE_DECLARED = "DECLARED";
 
+    /**
+     * 幂等键（EDD-SGW-DSN-CR-003）。
+     * <p>
+     * 属调用方业务语义（同一意图的传输重试），网关必须原样透传：不参与可信头清洗、
+     * 不参与身份推导、也不因访问模式不同而被删除。
+     */
+    public static final String IDEMPOTENCY_KEY = "Idempotency-Key";
+
     private SgwHeaders() {
     }
 
