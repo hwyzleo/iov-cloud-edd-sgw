@@ -78,15 +78,6 @@ public class PolicyValidator {
                 && (!policy.getRequiredScopes().isEmpty() || !policy.getRequiredPermissions().isEmpty())) {
             result.add("accessMode", "匿名访问策略不能声明 scope 或权限点要求");
         }
-        // EDD-SGW-DSN-CR-003 D-003-1：内部服务域无令牌身份，不评估客户端类型/scope/权限点
-        if (policy.getAccessMode() == AccessMode.INTERNAL) {
-            if (!policy.getRequiredScopes().isEmpty() || !policy.getRequiredPermissions().isEmpty()) {
-                result.add("accessMode", "内部服务域策略不能声明 scope 或权限点要求");
-            }
-            if (!policy.getAllowedClientTypes().isEmpty()) {
-                result.add("accessMode", "内部服务域策略不评估客户端类型（无令牌）");
-            }
-        }
         return result;
     }
 
@@ -320,7 +311,7 @@ public class PolicyValidator {
         if (policy == null || policy.getStableKey() == null) {
             return keys;
         }
-        if (mode == AccessMode.ANONYMOUS || mode == AccessMode.INTERNAL) {
+        if (mode == AccessMode.ANONYMOUS) {
             switch (policy.getStableKey()) {
                 case VEHICLE_ID -> keys.add("VEHICLE_ID");
                 case AUTHENTICATED_SUBJECT -> keys.add("AUTHENTICATED_SUBJECT");

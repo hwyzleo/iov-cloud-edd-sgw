@@ -64,8 +64,8 @@ class SgwV4MigrationContractTest {
     void backfillUpdatesAreGuarded() {
         List<String> routeUpdates = statements().stream()
                 .filter(statement -> upper(statement).startsWith("UPDATE SGW_ROUTE")).toList();
-        assertThat(routeUpdates).as("存量路由回填语句数量（车控/账号/认证/手机业务/车机/开放平台/内部域）")
-                .hasSize(8);
+        assertThat(routeUpdates).as("存量路由回填语句数量（车控/账号/认证/手机业务/车机/开放平台）")
+                .hasSize(7);
         assertThat(routeUpdates).allSatisfy(update -> {
             assertThat(update).as("回填必须带空策略守卫: %s", head(update)).contains(EMPTY_POLICY_GUARD);
             assertThat(update).as("回填必须只作用于有效行").contains("r.row_valid = 1");
@@ -170,6 +170,17 @@ class SgwV4MigrationContractTest {
         assertThat(sql).contains(EMPTY_POLICY_GUARD);
         assertThat(sql).as("必须写明不覆盖运营显式配置").contains("不覆盖运营已显式配置");
         assertThat(sql).as("必须写明幂等").contains("幂等");
+    }
+
+    @Test
+    @DisplayName("防回归：V3/V4 均不得出现内部服务域前缀（内部服务间不经网关）")
+    void noInternalServicePrefix() {
+        for (String sql : List.of(SeedSql.load(), SeedSql.loadV4())) {
+            assertThat(sql).doesNotContain("/api/service/");
+        }
+        assertThat(SeedSql.routesV4()).allSatisfy(route -> assertThat(route.paths())
+                .allSatisfy(path -> assertThat(path).doesNotContain("/api/service/")));
+        assertThat(SeedSql.loadV4()).doesNotContain("sgw-internal-service");
     }
 
     /**

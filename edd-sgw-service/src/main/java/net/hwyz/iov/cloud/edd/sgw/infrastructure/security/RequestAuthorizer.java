@@ -2,13 +2,10 @@ package net.hwyz.iov.cloud.edd.sgw.infrastructure.security;
 
 import lombok.extern.slf4j.Slf4j;
 import net.hwyz.iov.cloud.edd.sgw.api.enums.AccessMode;
-import net.hwyz.iov.cloud.edd.sgw.common.Cidr;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
-import net.hwyz.iov.cloud.edd.sgw.config.SgwProperties;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.RouteDefinition;
-import net.hwyz.iov.cloud.edd.sgw.domain.validation.InternalDomainRules;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.AuthenticatedIdentity;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledRoute;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledSnapshot;
@@ -17,16 +14,10 @@ import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SgwRouteMetrics;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SourceIpResolver;
 import net.hwyz.iov.cloud.framework.common.constant.CustomHeaders;
 import net.hwyz.iov.cloud.framework.common.constant.SecurityConstants;
-import org.springframework.core.io.buffer.DataBuffer;
-import org.springframework.core.io.buffer.DataBufferLimitException;
-import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.http.server.reactive.ServerHttpRequestDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.server.ServerWebExchangeDecorator;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
@@ -43,8 +34,10 @@ import java.util.Locale;
  * 并由 {@link SgwHeaders#IDENTITY_SOURCE} 标明下游收到的身份来源。
  * <p>
  * EDD-SGW-DSN-CR-003：策略缺失 / 禁用 / 未知访问模式一律 fail-closed（{@code SGW-403001}），
- * 不再回落匿名；新增 {@link AccessMode#INTERNAL} 判定链（内网来源 + 内部 HMAC，不注入任何身份头）；
- * 拒绝与身份来源写入进程内指标与脱敏审计字段（不含令牌、VIN 明文、签名原文）。
+ * 不再回落匿名；拒绝与身份来源写入进程内指标与脱敏审计字段（不含令牌、VIN 明文、签名原文）。
+ * <p>
+ * 【设计纠错】内部服务间调用经 Nacos + Feign 直连各微服务，不经过本网关，
+ * 因此网关不存在「内部服务域」判定链与相应访问模式。
  *
  * @author hwyz_leo
  */
@@ -75,20 +68,13 @@ public class RequestAuthorizer {
 
     private final CiamTokenVerifier tokenVerifier;
 
-    private final InternalHmacVerifier internalHmacVerifier;
-
-    private final SgwProperties properties;
-
     private final SgwRouteMetrics metrics;
 
     private final SourceIpResolver sourceIpResolver;
 
-    public RequestAuthorizer(CiamTokenVerifier tokenVerifier, InternalHmacVerifier internalHmacVerifier,
-                             SgwProperties properties, SgwRouteMetrics metrics,
+    public RequestAuthorizer(CiamTokenVerifier tokenVerifier, SgwRouteMetrics metrics,
                              SourceIpResolver sourceIpResolver) {
         this.tokenVerifier = tokenVerifier;
-        this.internalHmacVerifier = internalHmacVerifier;
-        this.properties = properties;
         this.metrics = metrics;
         this.sourceIpResolver = sourceIpResolver;
     }
@@ -119,7 +105,6 @@ public class RequestAuthorizer {
         return switch (mode) {
             case ANONYMOUS -> anonymous(exchange, authPolicy);
             case AUTHENTICATED -> authenticated(exchange, authPolicy, routeCode);
-            case INTERNAL -> internal(exchange, routeCode, policyCode);
         };
     }
 
@@ -157,103 +142,12 @@ public class RequestAuthorizer {
                 });
     }
 
-    /**
-     * 内部服务域判定链（EDD-SGW-DSN-CR-003 §18.1 / §19.3 / §19.4）：
-     * ① 来源 IP 命中 {@code sgw.runtime.internal-cidrs}；② 内部 HMAC 签名（时间窗 + 业务面 nonce）校验通过。
-     * 任一失败 → {@code SGW-403001}，不转发。通过后删除全部 {@code X-Internal-*} 与受信身份头，
-     * 不注入任何身份头、不写 {@code X-Identity-Source}。
-     *
-     * @param exchange 交换
-     * @param routeCode 路由编码
-     * @param policyCode 策略编码
-     * @return 授权结果（身份为空）
-     */
-    private Mono<AuthorizationResult> internal(ServerWebExchange exchange, String routeCode, String policyCode) {
-        String sourceIp = resolveSourceIp(exchange);
-        if (!sourceIpAllowed(sourceIp)) {
-            return reject(exchange, routeCode, policyCode, AccessMode.INTERNAL, SgwErrorCode.FORBIDDEN,
-                    RejectReason.INTERNAL_AUTH, "内部服务域来源不受信任");
-        }
-        return bufferBody(exchange)
-                .flatMap(body -> internalHmacVerifier
-                        .verify(exchange.getRequest(), InternalHmacVerifier.bodyHash(body),
-                                InternalHmacVerifier.NonceScope.SERVICE)
-                        .map(actor -> {
-                            log.info("event=sgw_internal_forward requestId={} routeCode={} policyCode={} client={} "
-                                            + "sourceIpHash={}", requestId(exchange), routeCode, policyCode, actor,
-                                    sourceIpHash(sourceIp));
-                            return new AuthorizationResult(
-                                    withBody(sanitize(exchange, null, false), body), null);
-                        }))
-                .onErrorMap(error -> {
-                    if (error instanceof SgwException sgwException
-                            && sgwException.errorCode() == SgwErrorCode.UPSTREAM_UNAVAILABLE) {
-                        return sgwException;
-                    }
-                    metrics.authReject(RejectReason.INTERNAL_AUTH, routeCode);
-                    log.warn("event=sgw_auth_reject requestId={} routeCode={} policyCode={} accessMode=INTERNAL "
-                                    + "identitySource=NONE rejectReason=INTERNAL_AUTH sourceIpHash={}",
-                            requestId(exchange), routeCode, policyCode, sourceIpHash(sourceIp));
-                    return new SgwException(SgwErrorCode.FORBIDDEN, "内部服务域签名校验失败", error);
-                });
-    }
-
-    /**
-     * 读取（并缓存）请求体，用于业务面签名摘要
-     */
-    private Mono<byte[]> bufferBody(ServerWebExchange exchange) {
-        int maxBodyBytes = properties.getSecurity().getInternal().getMaxBodyBytes();
-        return DataBufferUtils.join(exchange.getRequest().getBody(), maxBodyBytes)
-                .map(buffer -> {
-                    int length = buffer.readableByteCount();
-                    byte[] bytes = new byte[length];
-                    buffer.read(bytes);
-                    DataBufferUtils.release(buffer);
-                    return bytes;
-                })
-                .defaultIfEmpty(new byte[0])
-                .onErrorMap(DataBufferLimitException.class, error -> new SgwException(
-                        SgwErrorCode.FORBIDDEN, "内部服务域请求体超出签名缓存上限", error));
-    }
-
-    /**
-     * 以已缓存字节重建请求体，保证签名校验后仍可转发
-     *
-     * @param exchange 交换
-     * @param body     已缓存请求体
-     * @return 新交换
-     */
-    private ServerWebExchange withBody(ServerWebExchange exchange, byte[] body) {
-        ServerHttpRequest replay = new ServerHttpRequestDecorator(exchange.getRequest()) {
-            @Override
-            public Flux<DataBuffer> getBody() {
-                return body.length == 0 ? Flux.empty()
-                        : Flux.just(exchange.getResponse().bufferFactory().wrap(body));
-            }
-        };
-        return new ServerWebExchangeDecorator(exchange) {
-            @Override
-            public ServerHttpRequest getRequest() {
-                return replay;
-            }
-        };
-    }
-
     private String resolveSourceIp(ServerWebExchange exchange) {
         Object attribute = exchange.getAttributes().get(RequestAttributes.SOURCE_IP);
         if (attribute instanceof String resolved && !resolved.isBlank()) {
             return resolved;
         }
         return sourceIpResolver.resolve(exchange.getRequest());
-    }
-
-    private boolean sourceIpAllowed(String sourceIp) {
-        // 终审 R-1：空白条目（SGW_INTERNAL_CIDRS 未设置/内容含空段）在判定前过滤
-        List<String> cidrs = InternalDomainRules.effectiveCidrs(properties.getRuntime().getInternalCidrs());
-        if (sourceIp == null || sourceIp.isBlank() || cidrs.isEmpty()) {
-            return false;
-        }
-        return cidrs.stream().anyMatch(cidr -> Cidr.matches(cidr, sourceIp));
     }
 
     private Mono<AuthorizationResult> reject(ServerWebExchange exchange, String routeCode, String policyCode,
@@ -387,7 +281,7 @@ public class RequestAuthorizer {
      * 授权结果
      *
      * @param exchange 已清洗并写入身份头的交换
-     * @param identity 认证身份，匿名与内部服务域请求为 null
+     * @param identity 认证身份，匿名请求为 null
      */
     public record AuthorizationResult(ServerWebExchange exchange, AuthenticatedIdentity identity) {
     }

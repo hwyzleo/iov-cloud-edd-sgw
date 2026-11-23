@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * 在本地 MySQL 上真实执行 {@code V1}–{@code V4} Flyway 迁移并断言：
  * <ul>
- *     <li>V3 基线 6 策略 / 13 路由 + V4 补登 1 策略 / 7 路由全部落库；</li>
+ *     <li>V3 基线 5 策略 / 10 路由 + V4 补登 1 策略 / 7 路由全部落库；</li>
  *     <li>V4 可幂等重跑（重复执行脚本不再产生任何新行）；</li>
  *     <li>车控路由在库中为 AUTHENTICATED + MOBILE + scope/权限点，显式断言不是 ANONYMOUS；</li>
  *     <li>存量空策略路由按路径前缀被回填，运营已显式配置的行不被覆盖。</li>
@@ -73,10 +73,16 @@ class SgwRouteMigrationIT {
 
     @Test
     @Order(1)
-    @DisplayName("B-2：V3 基线 + V4 补登的路由与策略全部落库")
+    @DisplayName("B-2：V3 基线 + V4 补登的路由与策略全部落库（且无内部服务域前缀）")
     void seedsApplied() throws SQLException {
-        assertThat(count("SELECT COUNT(*) FROM sgw_auth_policy")).as("V3 6 + V4 1 策略").isEqualTo(7);
-        assertThat(count("SELECT COUNT(*) FROM sgw_route")).as("V3 13 + V4 7 路由").isEqualTo(20);
+        assertThat(count("SELECT COUNT(*) FROM sgw_auth_policy")).as("V3 5 + V4 1 策略").isEqualTo(6);
+        assertThat(count("SELECT COUNT(*) FROM sgw_route")).as("V3 10 + V4 7 路由").isEqualTo(17);
+        assertThat(count("SELECT COUNT(*) FROM sgw_auth_policy WHERE access_mode = 'INTERNAL'"))
+                .as("网关不存在内部服务域访问模式").isZero();
+        assertThat(count("SELECT COUNT(*) FROM sgw_route WHERE JSON_SEARCH(match_json, 'one', '/api/service/%') "
+                + "IS NOT NULL")).as("不得登记内部服务域路由（内部服务间不经网关）").isZero();
+        assertThat(count("SELECT COUNT(*) FROM sgw_auth_policy WHERE policy_code = 'sgw-internal-service'"))
+                .as("不得登记内部服务域策略").isZero();
         assertThat(count("SELECT COUNT(*) FROM sgw_route WHERE auth_policy_code IS NULL OR TRIM(auth_policy_code) = ''"))
                 .as("种子路由不得存在空策略").isZero();
         assertThat(count("SELECT COUNT(*) FROM sgw_auth_policy WHERE access_mode = 'ANONYMOUS'"))

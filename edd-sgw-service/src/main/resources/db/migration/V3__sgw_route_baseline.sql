@@ -5,19 +5,24 @@
 --       §19.5（R-9）、第 1 轮裁决 adjudication-1.md「SGW 专项」。
 -- 状态：CR 状态「待评审」，本迁移为设计实现产物，未合入 SPEC 正文。
 --
+-- 【设计纠错】内部服务域概念撤回：内部服务间调用全部经 Nacos + Feign 直连各微服务，
+--   不经过服务网关，因此本迁移**不登记**任何内部服务域（service）前缀策略与路由，
+--   网关也不存在「按来源网段 + 内部签名」的第三种访问模式。原内部服务域策略 P6 与
+--   路由 R7/R8/R13 已整体删除，策略与路由计数同步收敛为 5 / 10。
+--
 -- 要点：
---   1) 策略先于引用它的路由插入（P1..P6 → R1..R13）；
+--   1) 策略先于引用它的路由插入（P1..P5 → R1..R10）；
 --   2) 只写草稿，不自动发布（RD-003-4）；
 --   3) 已存在同编码行不更新，避免覆盖环境内的修改；种子需要升级时另开 V4（RD-003-1）；
 --   4) 选路仅按路径（BLK-5）：所有种子路由 match_json.clientTypes 为空数组，
---      客户端类型门禁由认证策略 allowed_client_types 承担（R5/R9-R12=MOBILE、R6=IVI），
+--      客户端类型门禁由认证策略 allowed_client_types 承担（R5/R7-R10=MOBILE、R6=IVI），
 --      保证「选路成功、鉴权拒绝」（401/403 而非 404），见 TC-003-15/18；
 --   5) sgw_route.client_types 仅作分页筛选冗余列；
---   6) 内部服务域（900 段）路由必须落在代码常量 INTERNAL_DOMAIN_PREFIXES 内（R-9）；
---      存在 INTERNAL 路由时 sgw.runtime.internal-cidrs 必填，否则启动 fail-fast（R-7）。
+--   6) access_mode 必填：策略缺 access_mode 时请求 fail-closed（SGW-403001），缺 auth_policy_code
+--      的路由在校验与发布两端均被拒绝（SGW-400001）。
 
 -- ---------------------------------------------------------------------------
--- P1..P6 认证授权策略
+-- P1..P5 认证授权策略
 -- ---------------------------------------------------------------------------
 
 -- P1 车机认证入口（匿名）：车机首次登录/令牌获取时尚无令牌；客户端资格由 CIAM 允许清单核对
@@ -70,18 +75,8 @@ SELECT 'sgw-vehicle-user', '车机端车辆会话',
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_auth_policy WHERE policy_code = 'sgw-vehicle-user');
 
--- P6 内部服务域：内网来源（internal-cidrs 必填）+ 内部 HMAC 签名；不注入任何身份头
-INSERT INTO sgw_auth_policy (policy_code, policy_name, description, access_mode,
-                             allowed_client_types, required_scopes, required_permissions, enabled,
-                             row_version, row_valid, create_by)
-SELECT 'sgw-internal-service', '内部服务域',
-       '内网来源 + 内部 HMAC 签名（时间窗 + 业务面 nonce），任一不满足即 SGW-403001；R-7：internal-cidrs 必填',
-       'INTERNAL', NULL, NULL, NULL, 1, 1, 1, 'flyway'
-FROM DUAL
-WHERE NOT EXISTS (SELECT 1 FROM sgw_auth_policy WHERE policy_code = 'sgw-internal-service');
-
 -- ---------------------------------------------------------------------------
--- R1..R13 路由（认证域 100 段 / 开放平台 110 段 / 手机域 200、220-250 / 车机 210 / 内部服务域 900-920）
+-- R1..R10 路由（认证域 100 段 / 开放平台 110 段 / 手机域 200、220-250 / 车机 210）
 -- ---------------------------------------------------------------------------
 
 -- R1 车机认证入口（BLK-5：已删除 X-Client-Id 匹配，任意客户端值含缺失头均可选路）
@@ -162,38 +157,12 @@ SELECT 'vehicle-activation-v1', '车机激活域', 'EDD-SGW-DSN-CR-003 R6（X-Vi
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'vehicle-activation-v1');
 
--- R7 内部服务域：登录票据消费（R-9：CIAM 当前经 Feign 直连 TSP，不经 SGW；本行语义为禁止公网匿名的静态可达性声明）
+-- R7 手机购车域（App 在用前缀 A2）
 INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
                        match_json, target_type, target_value, client_types,
                        transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
                        row_version, row_valid, create_by)
-SELECT 'service-activation-v1', '内部服务域-激活票据', 'EDD-SGW-DSN-CR-003 R7（R-9 叙述更正）',
-       900, 1,
-       '{"paths":["/api/service/activation/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
-       'SERVICE', 'iov-tsp', NULL,
-       NULL, 'sgw-internal-service', NULL, NULL, 1, 1, 'flyway'
-FROM DUAL
-WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'service-activation-v1');
-
--- R8 内部服务域：设备证明校验（R-9：CIAM 当前经 Feign 直连 SEC-VIAM）
-INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
-                       match_json, target_type, target_value, client_types,
-                       transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
-                       row_version, row_valid, create_by)
-SELECT 'service-device-proof-v1', '内部服务域-设备证明', 'EDD-SGW-DSN-CR-003 R8（R-9 叙述更正）',
-       910, 1,
-       '{"paths":["/api/service/deviceProof/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
-       'SERVICE', 'sec-viam', NULL,
-       NULL, 'sgw-internal-service', NULL, NULL, 1, 1, 'flyway'
-FROM DUAL
-WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'service-device-proof-v1');
-
--- R9 手机购车域（App 在用前缀 A2）
-INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
-                       match_json, target_type, target_value, client_types,
-                       transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
-                       row_version, row_valid, create_by)
-SELECT 'mobile-vso-v1', '手机购车域', 'EDD-SGW-DSN-CR-003 R9（BLK-6 A2）',
+SELECT 'mobile-vso-v1', '手机购车域', 'EDD-SGW-DSN-CR-003 R7（BLK-6 A2）',
        220, 1,
        '{"paths":["/api/mobile/vso/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
        'SERVICE', 'otd-vso', 'MOBILE',
@@ -201,12 +170,12 @@ SELECT 'mobile-vso-v1', '手机购车域', 'EDD-SGW-DSN-CR-003 R9（BLK-6 A2）'
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'mobile-vso-v1');
 
--- R10 手机车型域（App 在用前缀 A3；** 覆盖精确路径 /api/mobile/saleModel/v1，TC-003-17）
+-- R8 手机车型域（App 在用前缀 A3；** 覆盖精确路径 /api/mobile/saleModel/v1，TC-003-17）
 INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
                        match_json, target_type, target_value, client_types,
                        transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
                        row_version, row_valid, create_by)
-SELECT 'mobile-sale-model-v1', '手机车型域', 'EDD-SGW-DSN-CR-003 R10（BLK-6 A3）',
+SELECT 'mobile-sale-model-v1', '手机车型域', 'EDD-SGW-DSN-CR-003 R8（BLK-6 A3）',
        230, 1,
        '{"paths":["/api/mobile/saleModel/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
        'SERVICE', 'otd-vso', 'MOBILE',
@@ -214,12 +183,12 @@ SELECT 'mobile-sale-model-v1', '手机车型域', 'EDD-SGW-DSN-CR-003 R10（BLK-
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'mobile-sale-model-v1');
 
--- R11 手机账号域（App 在用前缀 A4；sec-ciam 以令牌 sub 取用户）
+-- R9 手机账号域（App 在用前缀 A4；sec-ciam 以令牌 sub 取用户）
 INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
                        match_json, target_type, target_value, client_types,
                        transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
                        row_version, row_valid, create_by)
-SELECT 'mobile-account-v1', '手机账号域', 'EDD-SGW-DSN-CR-003 R11（BLK-6 A4）',
+SELECT 'mobile-account-v1', '手机账号域', 'EDD-SGW-DSN-CR-003 R9（BLK-6 A4）',
        240, 1,
        '{"paths":["/api/mobile/account/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
        'SERVICE', 'sec-ciam', 'MOBILE',
@@ -227,28 +196,15 @@ SELECT 'mobile-account-v1', '手机账号域', 'EDD-SGW-DSN-CR-003 R11（BLK-6 A
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'mobile-account-v1');
 
--- R12 手机 MFA/风险（A6：按裁决登记**精确路径**，不扩面；TC-003-17 断言 /api/mobile/v1/risk/events 不命中）
+-- R10 手机 MFA/风险（A6：按裁决登记**精确路径**，不扩面；TC-003-17 断言 /api/mobile/v1/risk/events 不命中）
 INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
                        match_json, target_type, target_value, client_types,
                        transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
                        row_version, row_valid, create_by)
-SELECT 'mobile-risk-v1', '手机MFA与风险事件', 'EDD-SGW-DSN-CR-003 R12（BLK-6 A6，精确路径）',
+SELECT 'mobile-risk-v1', '手机MFA与风险事件', 'EDD-SGW-DSN-CR-003 R10（BLK-6 A6，精确路径）',
        250, 1,
        '{"paths":["/api/mobile/v1/risk"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
        'SERVICE', 'sec-ciam', 'MOBILE',
        NULL, 'sgw-mobile-user', NULL, NULL, 1, 1, 'flyway'
 FROM DUAL
 WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'mobile-risk-v1');
-
--- R13 内部服务域：VMD 首激活只读查询（R-9 新增 / EDD-VMD-DSN-CR-077 R-18 第 7 项）
-INSERT INTO sgw_route (route_code, route_name, description, priority, enabled,
-                       match_json, target_type, target_value, client_types,
-                       transform_json, auth_policy_code, traffic_policy_code, canary_policy_code,
-                       row_version, row_valid, create_by)
-SELECT 'service-vehicle-activation-v1', '内部服务域-首激活查询', 'EDD-SGW-DSN-CR-003 R13（R-9）',
-       920, 1,
-       '{"paths":["/api/service/vehicleActivation/v1/**"],"methods":[],"hosts":[],"headers":[],"queryParams":[],"clientTypes":[]}',
-       'SERVICE', 'edd-vmd', NULL,
-       NULL, 'sgw-internal-service', NULL, NULL, 1, 1, 'flyway'
-FROM DUAL
-WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'service-vehicle-activation-v1');

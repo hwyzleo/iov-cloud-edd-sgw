@@ -35,10 +35,6 @@ sgw:
   runtime:
     direct-upstream-hosts: ${SGW_DIRECT_UPSTREAM_HOSTS:}
     trusted-proxy-cidrs: ${SGW_TRUSTED_PROXY_CIDRS:}
-    # EDD-SGW-DSN-CR-003 R-7：存在 INTERNAL 路由时必填，缺失即启动 fail-fast（不可给宽松默认值）
-    internal-cidrs: ${SGW_INTERNAL_CIDRS:}
-    # EDD-SGW-DSN-CR-003 终审 R-1：严格模式默认开启；仅在明确知情的迁移期环境可置 false 降级为 WARN
-    internal-domain-strict: ${SGW_INTERNAL_DOMAIN_STRICT:true}
     discovery-service-name: edd-sgw
   publication:
     pointer-store: ${SGW_POINTER_STORE:nacos}

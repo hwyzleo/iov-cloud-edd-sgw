@@ -507,15 +507,15 @@ class SgwFoundationIT {
 
     @Test
     @Order(0)
-    @DisplayName("V3+V4 种子迁移幂等：策略 7 行 / 路由 20 行，重复执行不新增、不覆盖本地修改")
+    @DisplayName("V3+V4 种子迁移幂等：策略 6 行 / 路由 17 行，重复执行不新增、不覆盖本地修改")
     void seedMigrationIsIdempotent() {
         reseed();
-        assertThat(countRows("sgw_auth_policy")).isEqualTo(7);
-        assertThat(countRows("sgw_route")).isEqualTo(20);
+        assertThat(countRows("sgw_auth_policy")).isEqualTo(6);
+        assertThat(countRows("sgw_route")).isEqualTo(17);
 
         reseed();
-        assertThat(countRows("sgw_auth_policy")).isEqualTo(7);
-        assertThat(countRows("sgw_route")).isEqualTo(20);
+        assertThat(countRows("sgw_auth_policy")).isEqualTo(6);
+        assertThat(countRows("sgw_route")).isEqualTo(17);
 
         jdbcTemplate.update("UPDATE sgw_auth_policy SET policy_name = ? WHERE policy_code = ?",
                 "本地改名", "sgw-mobile-user");
@@ -534,7 +534,7 @@ class SgwFoundationIT {
 
         CompiledSnapshot snapshot = snapshotManager.current();
         assertThat(snapshot).isNotNull();
-        assertThat(snapshot.getRoutes()).hasSize(20);
+        assertThat(snapshot.getRoutes()).hasSize(17);
         RouteMatcher matcher = new RouteMatcher();
         for (SgwAppPathCatalog.AppPrefix prefix : SgwAppPathCatalog.APP_IN_USE_PREFIXES) {
             String probe = probePath(prefix.prefix());

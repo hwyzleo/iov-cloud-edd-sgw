@@ -14,18 +14,15 @@ import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.CompiledSnapshot;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SgwRouteMetrics;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.gateway.SourceIpResolver;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.CiamTokenVerifier;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.InternalHmacVerifier;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.RequestAuthorizer;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.security.SgwHeaders;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import reactor.core.publisher.Mono;
 
-import java.net.InetSocketAddress;
 import java.time.Instant;
 import java.util.List;
 
@@ -35,8 +32,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 请求认证与身份头清洗测试（EDD-SGW-DSN-CR-002 / EDD-SGW-DSN-CR-003）。
  * <p>
- * CR-003 收敛：策略缺失/禁用/未知模式 fail-closed；{@code INTERNAL} 判定链；
- * {@code Idempotency-Key} 透传；拒绝/身份来源写入进程内指标。
+ * CR-003 收敛：策略缺失/禁用/未知模式 fail-closed；{@code Idempotency-Key} 透传；
+ * 拒绝/身份来源写入进程内指标。【设计纠错】内部服务间不经网关，故无 {@code INTERNAL} 判定链。
  *
  * @author hwyz_leo
  */
@@ -45,8 +42,6 @@ class RequestAuthorizerTest {
     private static final String POLICY = "vehicle-user";
 
     private static final String ANON_POLICY = "anon-ivi-auth";
-
-    private static final String INTERNAL_POLICY = "internal-service";
 
     private static final String IDEMPOTENCY_VALUE = "idem-0001";
 
@@ -281,82 +276,9 @@ class RequestAuthorizerTest {
                 .isEqualTo(SgwErrorCode.UNAUTHORIZED);
     }
 
-    @Test
-    @DisplayName("内部服务域来源不在 internal-cidrs 内返回 403")
-    void internalRouteRejectsUntrustedSource() {
-        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
-                .remoteAddress(new InetSocketAddress("192.0.2.9", 45678))
-                .header("X-Internal-Client", "iov-tsp")
-                .build());
-
-        assertThatThrownBy(() -> authorizer(identity)
-                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block())
-                .isInstanceOf(SgwException.class)
-                .extracting(error -> ((SgwException) error).errorCode())
-                .isEqualTo(SgwErrorCode.FORBIDDEN);
-        assertThat(registry.find(SgwRouteMetrics.AUTH_REJECT)
-                .tag("reject_reason", "INTERNAL_AUTH").tag("route_code", "echo").counter().count()).isEqualTo(1.0);
-    }
-
-    @Test
-    @DisplayName("内部服务域签名校验失败返回 403")
-    void internalRouteRejectsInvalidSignature() {
-        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
-                .remoteAddress(new InetSocketAddress("10.1.2.3", 45678))
-                .header("X-Internal-Client", "iov-tsp")
-                .header("X-Internal-Signature", "invalid")
-                .build());
-        RequestAuthorizer authorizer = new RequestAuthorizer(new StubTokenVerifier(identity),
-                new StubInternalVerifier(null), properties(), metrics, new SourceIpResolver(properties()));
-
-        assertThatThrownBy(() -> authorizer
-                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block())
-                .isInstanceOf(SgwException.class)
-                .extracting(error -> ((SgwException) error).errorCode())
-                .isEqualTo(SgwErrorCode.FORBIDDEN);
-    }
-
-    @Test
-    @DisplayName("内部服务域签名通过后不注入身份头、不写身份来源、保留幂等键")
-    void internalRouteStripsIdentityHeaders() {
-        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/service/activation/v1/login-ticket")
-                .remoteAddress(new InetSocketAddress("10.1.2.3", 45678))
-                .header(SgwHeaders.IDEMPOTENCY_KEY, IDEMPOTENCY_VALUE)
-                .header("X-Internal-Client", "iov-tsp")
-                .header("X-Internal-Timestamp", "1700000000000")
-                .header("X-Internal-Nonce", "nonce-1")
-                .header("X-Internal-Signature", "signature")
-                .header("X-User-Id", "forged-user")
-                .header("X-Vin", "FORGED-VIN")
-                .header("X-Identity-Source", SgwHeaders.IDENTITY_SOURCE_CIAM)
-                .build());
-        RequestAuthorizer authorizer = new RequestAuthorizer(new StubTokenVerifier(identity),
-                new StubInternalVerifier("iov-tsp"), properties(), metrics, new SourceIpResolver(properties()));
-
-        RequestAuthorizer.AuthorizationResult result = authorizer
-                .authorize(exchange, snapshot(internalPolicy()), route(INTERNAL_POLICY)).block();
-
-        assertThat(result).isNotNull();
-        assertThat(result.identity()).isNull();
-        HttpHeaders headers = result.exchange().getRequest().getHeaders();
-        for (String removed : List.of("X-User-Id", "X-Vin", "X-Identity-Source", "X-Internal-Client",
-                "X-Internal-Timestamp", "X-Internal-Nonce", "X-Internal-Signature")) {
-            assertThat(headers.getFirst(removed)).as("内部服务域不应转发 %s", removed).isNull();
-        }
-        assertThat(headers.getFirst(SgwHeaders.IDEMPOTENCY_KEY)).isEqualTo(IDEMPOTENCY_VALUE);
-        assertThat(registry.find(SgwRouteMetrics.IDENTITY_SOURCE)
-                .tag("source", SgwHeaders.IDENTITY_SOURCE_CIAM).counter()).isNull();
-    }
-
     private RequestAuthorizer authorizer(AuthenticatedIdentity verified) {
-        return new RequestAuthorizer(new StubTokenVerifier(verified), new StubInternalVerifier("iov-tsp"),
-                properties(), metrics, new SourceIpResolver(properties()));
-    }
-
-    private SgwProperties properties() {
-        SgwProperties properties = new SgwProperties();
-        properties.getRuntime().setInternalCidrs(List.of("10.0.0.0/8"));
-        return properties;
+        return new RequestAuthorizer(new StubTokenVerifier(verified), metrics,
+                new SourceIpResolver(new SgwProperties()));
     }
 
     private CompiledSnapshot snapshot(AuthPolicy... policies) {
@@ -404,15 +326,6 @@ class RequestAuthorizerTest {
                 .normalized();
     }
 
-    private AuthPolicy internalPolicy() {
-        return AuthPolicy.builder()
-                .policyCode(INTERNAL_POLICY)
-                .accessMode(AccessMode.INTERNAL)
-                .enabled(true)
-                .build()
-                .normalized();
-    }
-
     private static final class StubTokenVerifier extends CiamTokenVerifier {
 
         private final AuthenticatedIdentity verified;
@@ -425,29 +338,6 @@ class RequestAuthorizerTest {
         @Override
         public Mono<AuthenticatedIdentity> verify(String token) {
             return Mono.just(verified);
-        }
-
-    }
-
-    private static final class StubInternalVerifier extends InternalHmacVerifier {
-
-        private final String actor;
-
-        private StubInternalVerifier(String actor) {
-            super(new SgwProperties(), null);
-            this.actor = actor;
-        }
-
-        @Override
-        public Mono<String> verify(ServerHttpRequest request, String bodyHash) {
-            return verify(request, bodyHash, NonceScope.ADMIN);
-        }
-
-        @Override
-        public Mono<String> verify(ServerHttpRequest request, String bodyHash, NonceScope scope) {
-            return actor == null
-                    ? Mono.error(new SgwException(SgwErrorCode.UNAUTHORIZED, "内部请求签名无效"))
-                    : Mono.just(actor);
         }
 
     }

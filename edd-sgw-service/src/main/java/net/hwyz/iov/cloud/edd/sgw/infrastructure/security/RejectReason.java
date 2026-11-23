@@ -22,8 +22,6 @@ public enum RejectReason {
     /** 路由未绑定认证授权策略（策略编码为空或策略不存在或访问模式缺失） */
     NO_POLICY,
     /** 认证授权策略被禁用 */
-    POLICY_DISABLED,
-    /** 内部服务域签名或来源校验失败 */
-    INTERNAL_AUTH
+    POLICY_DISABLED
 
 }

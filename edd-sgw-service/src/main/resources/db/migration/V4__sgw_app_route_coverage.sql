@@ -155,7 +155,8 @@ WHERE NOT EXISTS (SELECT 1 FROM sgw_route WHERE route_code = 'mobile-account-inf
 --     /api/vehicle/activation/v1/**                                 → sgw-vehicle-user
 --     /api/ivi/auth/v1/**                                           → sgw-anon-ivi-auth
 --     /api/open/{oauth,oidc}/v1/**                                  → sgw-anon-open-api
---     /api/service/**                                               → sgw-internal-service
+--   （【设计纠错】内部服务域概念已撤回：内部服务间经 Nacos + Feign 直连，不经网关，
+--     故不存在面向 service 前缀的回填规则，也不存在内部服务域策略。）
 --   守卫（每条 UPDATE 均带）：(auth_policy_code IS NULL OR TRIM(auth_policy_code) = '')
 --                             AND row_valid = 1 AND 策略行 row_valid=1 AND enabled=1
 --   路径匹配用 JSON_SEARCH（支持 %/_ 通配），兼容 match_json.paths 为单元素或多元素数组。
@@ -262,19 +263,6 @@ WHERE (r.auth_policy_code IS NULL OR TRIM(r.auth_policy_code) = '')
   AND r.row_valid = 1
   AND (JSON_SEARCH(r.match_json, 'one', '/api/open/oauth/%') IS NOT NULL
     OR JSON_SEARCH(r.match_json, 'one', '/api/open/oidc/%') IS NOT NULL);
-
--- B-3-8 内部服务域（内网来源 + 内部 HMAC；不得因空策略被误当匿名）
-UPDATE sgw_route r
-    JOIN sgw_auth_policy p
-    ON p.policy_code = 'sgw-internal-service' AND p.row_valid = 1 AND p.enabled = 1
-SET r.auth_policy_code = p.policy_code,
-    r.client_types     = COALESCE(NULLIF(TRIM(r.client_types), ''), p.allowed_client_types),
-    r.modify_by        = 'flyway-v4-backfill',
-    r.modify_time      = CURRENT_TIMESTAMP,
-    r.row_version      = r.row_version + 1
-WHERE (r.auth_policy_code IS NULL OR TRIM(r.auth_policy_code) = '')
-  AND r.row_valid = 1
-  AND JSON_SEARCH(r.match_json, 'one', '/api/service/%') IS NOT NULL;
 
 -- B-3-9 存量策略 access_mode 空白回填（只收紧不放宽：空白 → AUTHENTICATED）
 --   说明：access_mode 为 NOT NULL 列，但历史直接 INSERT 可能写入空串；

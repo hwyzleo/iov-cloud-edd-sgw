@@ -40,11 +40,11 @@ public final class SeedSql {
 
     private static final Pattern POLICY_CODE = Pattern.compile("SELECT\\s+'(sgw-[A-Za-z0-9-]+)'");
 
-    private static final Pattern ACCESS_MODE = Pattern.compile("'(ANONYMOUS|AUTHENTICATED|INTERNAL)'");
+    private static final Pattern ACCESS_MODE = Pattern.compile("'(ANONYMOUS|AUTHENTICATED)'");
 
     /** 策略行的 required_* 提取（列序：code, name, description, access_mode, clients, scopes, permissions, ...） */
     private static final Pattern POLICY_ROW = Pattern.compile(
-            "SELECT\\s+'(sgw-[A-Za-z0-9-]+)',\\s*'[^']*',\\s*'[^']*',\\s*'(ANONYMOUS|AUTHENTICATED|INTERNAL)',"
+            "SELECT\\s+'(sgw-[A-Za-z0-9-]+)',\\s*'[^']*',\\s*'[^']*',\\s*'(ANONYMOUS|AUTHENTICATED)',"
                     + "\\s*(NULL|'([^']*)'),\\s*(NULL|'([^']*)'),\\s*(NULL|'([^']*)')");
 
     private SeedSql() {

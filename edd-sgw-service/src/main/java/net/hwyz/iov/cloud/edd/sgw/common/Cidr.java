@@ -3,17 +3,17 @@ package net.hwyz.iov.cloud.edd.sgw.common;
 import java.net.InetAddress;
 
 /**
- * CIDR / 单 IP 匹配工具（EDD-SGW-DSN-CR-003 R-7）。
+ * CIDR / 单 IP 匹配工具。
  * <p>
- * 支持 IPv4、IPv6 与不带掩码的单 IP。非法条目在启动/发布校验阶段即被拒绝，不进入运行期。
+ * 支持 IPv4、IPv6 与不带掩码的单 IP；非法条目在校验阶段即被拒绝，不进入运行期。
  * <p>
- * 终审 R-2：单 IP 条目改为 <b>{@link InetAddress} 字节比较</b>，不再用字符串相等。原因：
+ * 单 IP 条目采用 <b>{@link InetAddress} 字节比较</b>，而非字符串相等。原因：
  * <ul>
  *     <li>{@code ::1} 与 {@code 0:0:0:0:0:0:0:1} 是同一地址的不同写法；</li>
  *     <li>IPv4-mapped IPv6（{@code ::ffff:127.0.0.1}）与 {@code 127.0.0.1} 是同一来源；</li>
  *     <li>容器/双栈环境里 {@code ::1}、{@code 0:0:0:0:0:0:0:1}、{@code ::ffff:127.0.0.1} 会混用。</li>
  * </ul>
- * 字符串比较会导致「配置了却不命中」→ INTERNAL 路由全量 403。CIDR 分支同样先归一化，
+ * 字符串比较会导致「配置了却不命中」（容器/双栈环境下尤其明显）。CIDR 分支同样先归一化，
  * 使 {@code 127.0.0.0/8} 也能命中 {@code ::ffff:127.0.0.1}。
  *
  * @author hwyz_leo

@@ -21,6 +21,10 @@ import java.util.HexFormat;
 
 /**
  * 内部管理请求 HMAC 校验（时间戳 + nonce 防重放）。
+ * <p>
+ * 仅服务于管理面（{@code /api/service/sgw/v1/**}，由 {@code AdminSecurityFilter} 调用）：
+ * 内部服务间的业务调用全部经 Nacos + Feign 直连，不经过服务网关
+ * （EDD-SGW-DSN-CR-003【设计纠错】），因此本类不提供业务面 nonce 键空间。
  *
  * @author hwyz_leo
  */
@@ -29,10 +33,9 @@ import java.util.HexFormat;
 public class InternalHmacVerifier {
 
     /**
-     * 不带请求体的 bodyHash 规范值：{@code sha256("")}（EDD-SGW-DSN-CR-003 R-8）
+     * 管理面 nonce 键前缀（既有键空间，升级与回退均不得变更）
      */
-    public static final String EMPTY_BODY_HASH =
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    static final String NONCE_KEY_PREFIX = "sgw:admin:nonce:";
 
     private final SgwProperties properties;
 
@@ -79,28 +82,13 @@ public class InternalHmacVerifier {
     }
 
     /**
-     * 校验签名并返回操作者（管理面，沿用 {@code sgw:admin:nonce:} 键空间）。
+     * 校验签名并返回操作者（仅管理面）
      *
      * @param request  请求
-     * @param bodyHash 请求体 SHA-256（无请求体时使用 {@link #EMPTY_BODY_HASH}）
+     * @param bodyHash 请求体 SHA-256
      * @return 操作者
      */
     public Mono<String> verify(ServerHttpRequest request, String bodyHash) {
-        return verify(request, bodyHash, NonceScope.ADMIN);
-    }
-
-    /**
-     * 校验签名并返回操作者。
-     * <p>
-     * nonce 键空间按调用面拆分（EDD-SGW-DSN-CR-003 R-8）：管理面 {@code sgw:admin:nonce:}，
-     * 业务面（{@code AccessMode.INTERNAL}）{@code sgw:svc:nonce:}，防止 nonce 跨面重放。
-     *
-     * @param request  请求
-     * @param bodyHash 请求体 SHA-256（无请求体时使用 {@link #EMPTY_BODY_HASH}）
-     * @param scope    nonce 键空间
-     * @return 操作者
-     */
-    public Mono<String> verify(ServerHttpRequest request, String bodyHash, NonceScope scope) {
         SgwProperties.Internal internal = properties.getSecurity().getInternal();
         String client = request.getHeaders().getFirst(internal.getClientHeader());
         String timestamp = request.getHeaders().getFirst(internal.getTimestampHeader());
@@ -145,7 +133,7 @@ public class InternalHmacVerifier {
         }
         log.debug("内部请求签名校验通过: client={}, path={}, 密钥指纹={}",
                 client.trim(), request.getURI().getRawPath(), fingerprint(secret));
-        String nonceKey = nonceKeyPrefix(scope) + client.trim() + ":" + nonce.trim();
+        String nonceKey = NONCE_KEY_PREFIX + client.trim() + ":" + nonce.trim();
         return redisTemplate.opsForValue()
                 .setIfAbsent(nonceKey, "1", Duration.ofSeconds(internal.getNonceTtlSeconds()))
                 .map(acquired -> {
@@ -163,61 +151,6 @@ public class InternalHmacVerifier {
                             client.trim(), request.getURI().getRawPath(), e.toString(), e);
                     return new SgwException(SgwErrorCode.UPSTREAM_UNAVAILABLE, "内部请求防重放不可用", e);
                 });
-    }
-
-    /**
-     * nonce 键前缀
-     *
-     * @param scope 调用面
-     * @return 前缀
-     */
-    String nonceKeyPrefix(NonceScope scope) {
-        SgwProperties.Internal internal = properties.getSecurity().getInternal();
-        String prefix = scope == NonceScope.SERVICE
-                ? internal.getNonceKeyPrefixService() : internal.getNonceKeyPrefixAdmin();
-        return prefix == null || prefix.isBlank() ? scope.defaultPrefix() : prefix;
-    }
-
-    /**
-     * 计算请求体摘要（EDD-SGW-DSN-CR-003 R-8）。
-     * <p>
-     * {@code bodyHash = lowerHex(sha256(原始请求体字节))}；GET/HEAD/DELETE 无请求体或
-     * {@code Content-Length: 0} 时固定为 {@link #EMPTY_BODY_HASH}，禁止使用 {@code sha256("null")}。
-     *
-     * @param body 原始请求体字节，可为 null
-     * @return 十六进制摘要
-     */
-    public static String bodyHash(byte[] body) {
-        if (body == null || body.length == 0) {
-            return EMPTY_BODY_HASH;
-        }
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
-        } catch (Exception e) {
-            throw new IllegalStateException("SHA-256 不可用", e);
-        }
-    }
-
-    /**
-     * 内部签名 nonce 键空间。
-     */
-    public enum NonceScope {
-
-        /** 管理面（MPT → SGW 管理接口） */
-        ADMIN("sgw:admin:nonce:"),
-        /** 业务面（内部服务域路由） */
-        SERVICE("sgw:svc:nonce:");
-
-        private final String defaultPrefix;
-
-        NonceScope(String defaultPrefix) {
-            this.defaultPrefix = defaultPrefix;
-        }
-
-        String defaultPrefix() {
-            return defaultPrefix;
-        }
-
     }
 
     /**

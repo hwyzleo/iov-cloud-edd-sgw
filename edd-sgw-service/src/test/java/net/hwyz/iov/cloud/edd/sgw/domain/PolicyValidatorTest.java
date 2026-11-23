@@ -62,42 +62,6 @@ class PolicyValidatorTest {
     }
 
     @Test
-    @DisplayName("内部服务域策略不评估客户端类型、scope 与权限点")
-    void internalPolicy() {
-        AuthPolicy invalid = AuthPolicy.builder()
-                .policyCode("internal-service")
-                .policyName("内部服务域")
-                .accessMode(AccessMode.INTERNAL)
-                .allowedClientTypes(List.of("MOBILE"))
-                .requiredScopes(List.of("internal.read"))
-                .requiredPermissions(List.of("edd:internal:read"))
-                .build();
-        ValidationResult result = validator.validateAuth(invalid);
-        assertThat(result.valid()).isFalse();
-        assertThat(result.errors()).extracting(ValidationError::field).contains("accessMode");
-
-        AuthPolicy valid = AuthPolicy.builder()
-                .policyCode("internal-service")
-                .policyName("内部服务域")
-                .accessMode(AccessMode.INTERNAL)
-                .build();
-        assertThat(validator.validateAuth(valid).valid()).isTrue();
-    }
-
-    @Test
-    @DisplayName("INTERNAL 与 ANONYMOUS 同表处理：身份类灰度稳定键不可用")
-    void internalUnavailableStableKeys() {
-        CanaryPolicy policy = CanaryPolicy.builder()
-                .policyCode("canary")
-                .policyName("灰度")
-                .stableKey(CanaryStableKey.VEHICLE_ID)
-                .build();
-        assertThat(validator.unavailableStableKeys(policy, AccessMode.INTERNAL)).containsExactly("VEHICLE_ID");
-        assertThat(validator.unavailableStableKeys(policy, AccessMode.ANONYMOUS)).containsExactly("VEHICLE_ID");
-        assertThat(validator.unavailableStableKeys(policy, AccessMode.AUTHENTICATED)).isEmpty();
-    }
-
-    @Test
     @DisplayName("流量策略校验超时、限流、熔断与安全重试")
     void trafficPolicy() {
         TrafficPolicy invalid = TrafficPolicy.builder()
