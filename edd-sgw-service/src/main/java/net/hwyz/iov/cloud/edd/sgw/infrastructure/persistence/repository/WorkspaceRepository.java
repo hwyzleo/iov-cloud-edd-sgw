@@ -38,6 +38,15 @@ public class WorkspaceRepository {
     }
 
     /**
+     * 读取工作区（不初始化，供只读事务使用）
+     *
+     * @return 工作区，不存在时为 null
+     */
+    public ConfigWorkspacePo find() {
+        return mapper.selectById(WORKSPACE_ID);
+    }
+
+    /**
      * 行锁读取工作区（必须在事务中调用）
      *
      * @return 工作区

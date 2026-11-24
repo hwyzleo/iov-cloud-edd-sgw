@@ -7,6 +7,7 @@ import net.hwyz.iov.cloud.edd.sgw.api.vo.request.RollbackRequest;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionDetailResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionResponse;
+import net.hwyz.iov.cloud.edd.sgw.api.vo.response.DraftConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.PublicationResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.WorkspaceResponse;
 import net.hwyz.iov.cloud.edd.sgw.common.PageSlice;
@@ -64,6 +65,11 @@ public class ConfigVersionController {
     public Mono<ApiResponse<ConfigDiffResponse>> diff(@RequestParam("from") Long from,
                                                       @RequestParam("to") Long to) {
         return AdminWebSupport.async(() -> configVersionService.diff(from, to));
+    }
+
+    @GetMapping("/config-versions/draft-diff")
+    public Mono<ApiResponse<DraftConfigDiffResponse>> draftDiff() {
+        return AdminWebSupport.async(configVersionService::draftDiff);
     }
 
     @GetMapping("/config-versions/{versionNo}")

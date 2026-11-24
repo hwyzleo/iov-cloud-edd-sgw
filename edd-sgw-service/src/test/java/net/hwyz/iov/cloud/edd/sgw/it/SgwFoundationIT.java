@@ -597,9 +597,151 @@ class SgwFoundationIT {
                 "enabled", true)), 400, "SGW-400001");
     }
 
+    @Test
+    @Order(23)
+    @DisplayName("待发布变更预览：一致只读比较、无写入副作用、并发冲突与快照校验（EDD-SGW-DSN-CR-004）")
+    void draftDiffPreview() {
+        String authCode = anonymousPolicy();
+        String routeCode = "draft-diff-route";
+        String addedRouteCode = "draft-diff-added";
+        String removedPolicyCode = "draft-diff-removeme";
+        createAuthPolicy(removedPolicyCode, List.of(), List.of());
+        createRoute(Map.of(
+                "routeCode", routeCode,
+                "routeName", "待发布变更路由",
+                "priority", 100,
+                "enabled", true,
+                "match", Map.of("paths", List.of("/draft-diff"), "methods", List.of("GET")),
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", authCode));
+
+        // 首次发布前：无基准版本，全部有效草稿对象为新增
+        JsonNode beforePublish = adminJson(HttpMethod.GET, ADMIN_PREFIX + "/config-versions/draft-diff", null);
+        assertThat(beforePublish.get("baseVersionNo").isNull()).isTrue();
+        assertThat(beforePublish.get("draftRevision").asLong()).isGreaterThan(0L);
+        JsonNode addedRoute = diffItem(beforePublish, "ROUTE", routeCode);
+        assertThat(addedRoute.get("changeType").asText()).isEqualTo("ADDED");
+        assertThat(addedRoute.get("before").isNull()).isTrue();
+        assertThat(addedRoute.get("after").get("routeCode").asText()).isEqualTo(routeCode);
+        assertThat(addedRoute.get("fields")).isEmpty();
+        assertThat(diffItem(beforePublish, "AUTH_POLICY", removedPolicyCode).get("changeType").asText())
+                .isEqualTo("ADDED");
+        assertThat(countRows("sgw_config_version")).isZero();
+        assertThat(countRows("sgw_publication")).isZero();
+
+        JsonNode publication = publishAndWait();
+        long baseVersion = publication.get("targetVersionNo").asLong();
+        long staleRevision = workspace().get("draftRevision").asLong();
+        int versionsAfterPublish = countRows("sgw_config_version");
+        int publicationsAfterPublish = countRows("sgw_publication");
+        Long activeVersionNo = snapshotManager.activeVersionNo();
+
+        // 发布后修改路由、新增路由、删除未被引用策略
+        JsonNode route = getRoute(routeCode);
+        updateRoute(routeCode, Map.of(
+                "routeCode", routeCode,
+                "routeName", "待发布变更路由",
+                "priority", 200,
+                "enabled", true,
+                "match", Map.of("paths", List.of("/draft-diff-v2"), "methods", List.of("GET")),
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", authCode,
+                "rowVersion", route.get("rowVersion").asInt()));
+        createRoute(Map.of(
+                "routeCode", addedRouteCode,
+                "routeName", "待发布新增路由",
+                "priority", 300,
+                "enabled", true,
+                "match", Map.of("paths", List.of("/draft-diff-added"), "methods", List.of("GET")),
+                "target", Map.of("type", "HTTP", "uri", "http://127.0.0.1:" + upstreamPort + "/echo"),
+                "authPolicyCode", authCode));
+        adminJson(HttpMethod.DELETE, ADMIN_PREFIX + "/policies/auth/" + removedPolicyCode, null);
+
+        JsonNode preview = adminJson(HttpMethod.GET, ADMIN_PREFIX + "/config-versions/draft-diff", null);
+        assertThat(preview.get("baseVersionNo").asLong()).isEqualTo(baseVersion);
+        long previewRevision = preview.get("draftRevision").asLong();
+        assertThat(previewRevision).isGreaterThan(staleRevision);
+
+        JsonNode modified = diffItem(preview, "ROUTE", routeCode);
+        assertThat(modified.get("changeType").asText()).isEqualTo("MODIFIED");
+        assertThat(modified.get("before").get("priority").asInt()).isEqualTo(100);
+        assertThat(modified.get("after").get("priority").asInt()).isEqualTo(200);
+        assertThat(modifiedFields(modified)).contains("/priority", "/match/paths/0");
+        JsonNode priorityField = diffField(modified, "/priority");
+        assertThat(priorityField.get("beforeValue").asInt()).isEqualTo(100);
+        assertThat(priorityField.get("afterValue").asInt()).isEqualTo(200);
+        JsonNode removed = diffItem(preview, "AUTH_POLICY", removedPolicyCode);
+        assertThat(removed.get("changeType").asText()).isEqualTo("REMOVED");
+        assertThat(removed.get("before").get("policyCode").asText()).isEqualTo(removedPolicyCode);
+        assertThat(removed.get("after").isNull()).isTrue();
+        JsonNode added = diffItem(preview, "ROUTE", addedRouteCode);
+        assertThat(added.get("changeType").asText()).isEqualTo("ADDED");
+        assertThat(added.get("after").get("routeCode").asText()).isEqualTo(addedRouteCode);
+
+        // 只读预览不产生版本、发布记录、工作区目标版本或实例激活版本变化
+        assertThat(countRows("sgw_config_version")).isEqualTo(versionsAfterPublish);
+        assertThat(countRows("sgw_publication")).isEqualTo(publicationsAfterPublish);
+        assertThat(workspace().get("targetVersionNo").asLong()).isEqualTo(baseVersion);
+        assertThat(snapshotManager.activeVersionNo()).isEqualTo(activeVersionNo);
+        assertThat(workspace().get("draftRevision").asLong()).isEqualTo(previewRevision);
+
+        // 旧修订号发布返回既有冲突且不新增版本或发布记录
+        assertError(signed(HttpMethod.POST, ADMIN_PREFIX + "/config-versions",
+                Map.of("draftRevision", staleRevision)), 409, "SGW-409001");
+        assertThat(countRows("sgw_config_version")).isEqualTo(versionsAfterPublish);
+        assertThat(countRows("sgw_publication")).isEqualTo(publicationsAfterPublish);
+
+        // 使用预览返回的修订号发布成功；发布后待发布差异为空
+        JsonNode second = publishAndWait();
+        long secondVersion = second.get("targetVersionNo").asLong();
+        JsonNode emptyPreview = adminJson(HttpMethod.GET, ADMIN_PREFIX + "/config-versions/draft-diff", null);
+        assertThat(emptyPreview.get("baseVersionNo").asLong()).isEqualTo(secondVersion);
+        assertThat(emptyPreview.get("items")).isEmpty();
+
+        // 历史版本比较保持兼容并增量携带字段级差异
+        JsonNode historyDiff = adminJson(HttpMethod.GET,
+                ADMIN_PREFIX + "/config-versions/diff?from=" + baseVersion + "&to=" + secondVersion, null);
+        assertThat(historyDiff.get("fromVersionNo").asLong()).isEqualTo(baseVersion);
+        assertThat(historyDiff.get("toVersionNo").asLong()).isEqualTo(secondVersion);
+        assertThat(diffItem(historyDiff, "ROUTE", routeCode).get("changeType").asText()).isEqualTo("MODIFIED");
+        assertThat(modifiedFields(diffItem(historyDiff, "ROUTE", routeCode))).contains("/priority");
+
+        // 基准版本校验和被篡改时拒绝预览
+        jdbcTemplate.update("UPDATE sgw_config_version SET checksum = 'tampered' WHERE version_no = ?",
+                secondVersion);
+        assertError(signed(HttpMethod.GET, ADMIN_PREFIX + "/config-versions/draft-diff", null), 400,
+                "SGW-400001");
+    }
+
     /**
      * 测试用匿名策略（EDD-SGW-DSN-CR-003 起路由必须绑定策略）
      */
+    private JsonNode diffItem(JsonNode diff, String objectType, String code) {
+        for (JsonNode item : diff.get("items")) {
+            if (item.get("objectType").asText().equals(objectType) && item.get("code").asText().equals(code)) {
+                return item;
+            }
+        }
+        throw new AssertionError("缺少差异项: " + objectType + "/" + code + " in " + diff);
+    }
+
+    private List<String> modifiedFields(JsonNode item) {
+        List<String> paths = new java.util.ArrayList<>();
+        for (JsonNode field : item.get("fields")) {
+            paths.add(field.get("path").asText());
+        }
+        return paths;
+    }
+
+    private JsonNode diffField(JsonNode item, String path) {
+        for (JsonNode field : item.get("fields")) {
+            if (field.get("path").asText().equals(path)) {
+                return field;
+            }
+        }
+        throw new AssertionError("缺少字段差异: " + path + " in " + item);
+    }
+
     private String anonymousPolicy() {
         String code = "it-anon";
         if (createdPolicies.add(code)) {

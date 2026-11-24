@@ -5,10 +5,6 @@ import net.hwyz.iov.cloud.edd.sgw.common.Json;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.SgwConfiguration;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.AuthPolicyRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.CanaryPolicyRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.RouteRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.TrafficPolicyRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -21,21 +17,10 @@ import java.time.Instant;
 @Service
 public class ExportService {
 
-    private final RouteRepository routeRepository;
+    private final DraftConfigurationLoader draftConfigurationLoader;
 
-    private final AuthPolicyRepository authPolicyRepository;
-
-    private final TrafficPolicyRepository trafficPolicyRepository;
-
-    private final CanaryPolicyRepository canaryPolicyRepository;
-
-    public ExportService(RouteRepository routeRepository, AuthPolicyRepository authPolicyRepository,
-                         TrafficPolicyRepository trafficPolicyRepository,
-                         CanaryPolicyRepository canaryPolicyRepository) {
-        this.routeRepository = routeRepository;
-        this.authPolicyRepository = authPolicyRepository;
-        this.trafficPolicyRepository = trafficPolicyRepository;
-        this.canaryPolicyRepository = canaryPolicyRepository;
+    public ExportService(DraftConfigurationLoader draftConfigurationLoader) {
+        this.draftConfigurationLoader = draftConfigurationLoader;
     }
 
     /**
@@ -45,16 +30,17 @@ public class ExportService {
      * @return 导出结果
      */
     public ExportResponseVo export(String type) {
+        SgwConfiguration configuration = draftConfigurationLoader.load();
         String content = switch (type == null ? "" : type) {
-            case "routes" -> Json.write(routeRepository.findAllValid().stream()
+            case "routes" -> Json.write(configuration.getRoutes().stream()
                     .map(Assembler::toResponse).toList());
-            case "auth-policies" -> Json.write(authPolicyRepository.findAllValid().stream()
+            case "auth-policies" -> Json.write(configuration.getAuthPolicies().stream()
                     .map(Assembler::toResponse).toList());
-            case "traffic-policies" -> Json.write(trafficPolicyRepository.findAllValid().stream()
+            case "traffic-policies" -> Json.write(configuration.getTrafficPolicies().stream()
                     .map(Assembler::toResponse).toList());
-            case "canary-policies" -> Json.write(canaryPolicyRepository.findAllValid().stream()
+            case "canary-policies" -> Json.write(configuration.getCanaryPolicies().stream()
                     .map(Assembler::toResponse).toList());
-            case "config" -> Json.write(Assembler.toSnapshotVo(configuration()));
+            case "config" -> Json.write(Assembler.toSnapshotVo(configuration));
             default -> throw new SgwException(SgwErrorCode.VALIDATION_FAILED, "未知导出类型: " + type);
         };
         return ExportResponseVo.builder()
@@ -62,15 +48,6 @@ public class ExportService {
                 .generatedAt(Instant.now())
                 .content(content)
                 .build();
-    }
-
-    private SgwConfiguration configuration() {
-        return SgwConfiguration.builder()
-                .routes(routeRepository.findAllValid())
-                .authPolicies(authPolicyRepository.findAllValid())
-                .trafficPolicies(trafficPolicyRepository.findAllValid())
-                .canaryPolicies(canaryPolicyRepository.findAllValid())
-                .build().normalized();
     }
 
 }

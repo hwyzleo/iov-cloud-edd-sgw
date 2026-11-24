@@ -5,6 +5,7 @@ import net.hwyz.iov.cloud.edd.sgw.api.vo.request.RollbackRequest;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionDetailResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionResponse;
+import net.hwyz.iov.cloud.edd.sgw.api.vo.response.DraftConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.PublicationResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.WorkspaceResponse;
 import net.hwyz.iov.cloud.framework.common.bean.ApiResponse;
@@ -70,6 +71,14 @@ public interface SgwConfigVersionService {
      */
     @GetMapping("/config-versions/diff")
     ApiResponse<ConfigDiffResponse> diff(@RequestParam("from") Long from, @RequestParam("to") Long to);
+
+    /**
+     * 待发布配置变更预览（当前发布版本与工作区草稿比较）
+     *
+     * @return 待发布差异
+     */
+    @GetMapping("/config-versions/draft-diff")
+    ApiResponse<DraftConfigDiffResponse> draftDiff();
 
     /**
      * 创建并发布回滚版本

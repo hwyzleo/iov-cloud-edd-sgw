@@ -6,28 +6,23 @@ import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigDiffItemVo;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionDetailResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.ConfigVersionResponse;
+import net.hwyz.iov.cloud.edd.sgw.api.vo.response.DraftConfigDiffResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.PublicationResponse;
 import net.hwyz.iov.cloud.edd.sgw.api.vo.response.WorkspaceResponse;
 import net.hwyz.iov.cloud.edd.sgw.common.Json;
 import net.hwyz.iov.cloud.edd.sgw.common.PageSlice;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwErrorCode;
 import net.hwyz.iov.cloud.edd.sgw.common.SgwException;
-import net.hwyz.iov.cloud.edd.sgw.domain.model.AuthPolicy;
-import net.hwyz.iov.cloud.edd.sgw.domain.model.CanaryPolicy;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.ConfigSnapshot;
-import net.hwyz.iov.cloud.edd.sgw.domain.model.RouteDefinition;
 import net.hwyz.iov.cloud.edd.sgw.domain.model.SgwConfiguration;
-import net.hwyz.iov.cloud.edd.sgw.domain.model.TrafficPolicy;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.po.ConfigWorkspacePo;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.ConfigVersionRepository;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.WorkspaceRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.function.BiConsumer;
 
 /**
  * 配置版本与回滚用例。
@@ -47,16 +42,24 @@ public class ConfigVersionService {
 
     private final PublicationService publicationService;
 
+    private final DraftConfigurationLoader draftConfigurationLoader;
+
+    private final ConfigurationDiffService configurationDiffService;
+
     public ConfigVersionService(PublishTransactionService publishTransactionService,
                                 PublicationDispatcher publicationDispatcher,
                                 ConfigVersionRepository configVersionRepository,
                                 WorkspaceRepository workspaceRepository,
-                                PublicationService publicationService) {
+                                PublicationService publicationService,
+                                DraftConfigurationLoader draftConfigurationLoader,
+                                ConfigurationDiffService configurationDiffService) {
         this.publishTransactionService = publishTransactionService;
         this.publicationDispatcher = publicationDispatcher;
         this.configVersionRepository = configVersionRepository;
         this.workspaceRepository = workspaceRepository;
         this.publicationService = publicationService;
+        this.draftConfigurationLoader = draftConfigurationLoader;
+        this.configurationDiffService = configurationDiffService;
     }
 
     /**
@@ -150,47 +153,33 @@ public class ConfigVersionService {
     public ConfigDiffResponse diff(Long from, Long to) {
         SgwConfiguration fromConfiguration = Json.read(loadVerified(from).getSnapshotJson(), SgwConfiguration.class);
         SgwConfiguration toConfiguration = Json.read(loadVerified(to).getSnapshotJson(), SgwConfiguration.class);
-        List<ConfigDiffItemVo> items = new ArrayList<>();
-        compare("ROUTE", fromConfiguration.getRoutes(), toConfiguration.getRoutes(),
-                RouteDefinition::getRouteCode, items);
-        compare("AUTH_POLICY", fromConfiguration.getAuthPolicies(), toConfiguration.getAuthPolicies(),
-                AuthPolicy::getPolicyCode, items);
-        compare("TRAFFIC_POLICY", fromConfiguration.getTrafficPolicies(), toConfiguration.getTrafficPolicies(),
-                TrafficPolicy::getPolicyCode, items);
-        compare("CANARY_POLICY", fromConfiguration.getCanaryPolicies(), toConfiguration.getCanaryPolicies(),
-                CanaryPolicy::getPolicyCode, items);
+        List<ConfigDiffItemVo> items = configurationDiffService.compare(fromConfiguration, toConfiguration);
         return ConfigDiffResponse.builder().fromVersionNo(from).toVersionNo(to).items(items).build();
     }
 
-    private <T> void compare(String type, List<T> from, List<T> to, java.util.function.Function<T, String> code,
-                             List<ConfigDiffItemVo> items) {
-        Map<String, String> fromMap = index(from, code);
-        Map<String, String> toMap = index(to, code);
-        Map<String, String> all = new LinkedHashMap<>(fromMap);
-        toMap.forEach(all::putIfAbsent);
-        for (String key : all.keySet()) {
-            boolean inFrom = fromMap.containsKey(key);
-            boolean inTo = toMap.containsKey(key);
-            if (!inFrom) {
-                items.add(item(type, key, "ADDED"));
-            } else if (!inTo) {
-                items.add(item(type, key, "REMOVED"));
-            } else if (!fromMap.get(key).equals(toMap.get(key))) {
-                items.add(item(type, key, "MODIFIED"));
-            }
+    /**
+     * 待发布配置变更预览（EDD-SGW-DSN-CR-004）：当前发布版本与工作区草稿的只读一致比较。
+     * <p>
+     * 事务内首个查询为工作区，使基准快照与四类草稿处于同一数据库一致读视图；不锁定工作区、不写入任何记录。
+     *
+     * @return 待发布差异
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public DraftConfigDiffResponse draftDiff() {
+        ConfigWorkspacePo workspace = workspaceRepository.find();
+        if (workspace == null) {
+            throw new SgwException(SgwErrorCode.CONFLICT, "配置工作区不可用");
         }
-    }
-
-    private <T> Map<String, String> index(List<T> values, java.util.function.Function<T, String> code) {
-        Map<String, String> result = new LinkedHashMap<>();
-        for (T value : values) {
-            result.put(code.apply(value), Json.canonical(value));
-        }
-        return result;
-    }
-
-    private ConfigDiffItemVo item(String type, String code, String changeType) {
-        return ConfigDiffItemVo.builder().objectType(type).code(code).changeType(changeType).build();
+        Long baseVersionNo = workspace.getTargetVersionNo();
+        SgwConfiguration base = baseVersionNo == null
+                ? SgwConfiguration.builder().build().normalized()
+                : Json.read(loadVerified(baseVersionNo).getSnapshotJson(), SgwConfiguration.class);
+        SgwConfiguration draft = draftConfigurationLoader.load();
+        return DraftConfigDiffResponse.builder()
+                .baseVersionNo(baseVersionNo)
+                .draftRevision(workspace.getDraftRevision())
+                .items(configurationDiffService.compare(base, draft))
+                .build();
     }
 
     private ConfigSnapshot loadVerified(Long versionNo) {

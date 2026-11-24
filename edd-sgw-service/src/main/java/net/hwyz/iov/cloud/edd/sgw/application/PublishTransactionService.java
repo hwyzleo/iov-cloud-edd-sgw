@@ -13,13 +13,9 @@ import net.hwyz.iov.cloud.edd.sgw.domain.validation.ConfigurationValidator;
 import net.hwyz.iov.cloud.edd.sgw.domain.validation.ValidationResult;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.po.ConfigWorkspacePo;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.po.PublicationPo;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.AuthPolicyRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.CanaryPolicyRepository;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.ConfigVersionRepository;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.InstancePublicationRepository;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.PublicationRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.RouteRepository;
-import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.TrafficPolicyRepository;
 import net.hwyz.iov.cloud.edd.sgw.infrastructure.persistence.repository.WorkspaceRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,13 +36,7 @@ import java.util.UUID;
 @Service
 public class PublishTransactionService {
 
-    private final RouteRepository routeRepository;
-
-    private final AuthPolicyRepository authPolicyRepository;
-
-    private final TrafficPolicyRepository trafficPolicyRepository;
-
-    private final CanaryPolicyRepository canaryPolicyRepository;
+    private final DraftConfigurationLoader draftConfigurationLoader;
 
     private final ConfigVersionRepository configVersionRepository;
 
@@ -60,19 +50,14 @@ public class PublishTransactionService {
 
     private final GatewayInstanceProvider gatewayInstanceProvider;
 
-    public PublishTransactionService(RouteRepository routeRepository, AuthPolicyRepository authPolicyRepository,
-                                     TrafficPolicyRepository trafficPolicyRepository,
-                                     CanaryPolicyRepository canaryPolicyRepository,
+    public PublishTransactionService(DraftConfigurationLoader draftConfigurationLoader,
                                      ConfigVersionRepository configVersionRepository,
                                      PublicationRepository publicationRepository,
                                      InstancePublicationRepository instancePublicationRepository,
                                      WorkspaceRepository workspaceRepository,
                                      ConfigurationValidator configurationValidator,
                                      GatewayInstanceProvider gatewayInstanceProvider) {
-        this.routeRepository = routeRepository;
-        this.authPolicyRepository = authPolicyRepository;
-        this.trafficPolicyRepository = trafficPolicyRepository;
-        this.canaryPolicyRepository = canaryPolicyRepository;
+        this.draftConfigurationLoader = draftConfigurationLoader;
         this.configVersionRepository = configVersionRepository;
         this.publicationRepository = publicationRepository;
         this.instancePublicationRepository = instancePublicationRepository;
@@ -92,7 +77,7 @@ public class PublishTransactionService {
     @Transactional
     public PreparedPublication preparePublish(long draftRevision, String actor, String comment) {
         ConfigWorkspacePo workspace = lockWorkspace(draftRevision);
-        SgwConfiguration configuration = loadConfiguration();
+        SgwConfiguration configuration = draftConfigurationLoader.load();
         validateOrThrow(configuration);
         long versionNo = nextVersionNo(workspace);
         String snapshotJson = Json.write(configuration);
@@ -204,16 +189,6 @@ public class PublishTransactionService {
                     "草稿修订号不匹配，请刷新后重新发布");
         }
         return workspace;
-    }
-
-    private SgwConfiguration loadConfiguration() {
-        SgwConfiguration configuration = SgwConfiguration.builder()
-                .routes(routeRepository.findAllValid())
-                .authPolicies(authPolicyRepository.findAllValid())
-                .trafficPolicies(trafficPolicyRepository.findAllValid())
-                .canaryPolicies(canaryPolicyRepository.findAllValid())
-                .build();
-        return configuration.normalized();
     }
 
     private void validateOrThrow(SgwConfiguration configuration) {
